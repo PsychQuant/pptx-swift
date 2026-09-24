@@ -15,8 +15,8 @@ public struct PptxReader {
         let target: String
         var targetMode: String? = nil
         /// For image relationships: the file name directly under `ppt/media/`
-        /// that the target resolves to, when that part exists (see
-        /// `resolvedMediaFileName`). Nil otherwise.
+        /// that the target resolves to, when that part is a regular media file
+        /// (see `resolvedMediaFileName`). Nil otherwise.
         var mediaFileName: String? = nil
 
         var isExternal: Bool { targetMode?.caseInsensitiveCompare("External") == .orderedSame }
@@ -41,7 +41,11 @@ public struct PptxReader {
 
         let tempDir = try ZipHelper.unzip(url)
         defer { ZipHelper.cleanup(tempDir) }
+        return try read(unpackedPackageAt: tempDir)
+    }
 
+    /// Parses a package that has already been extracted to `tempDir`.
+    static func read(unpackedPackageAt tempDir: URL) throws -> Presentation {
         var presentation = Presentation()
 
         // 1. 解析 presentation.xml
@@ -184,18 +188,61 @@ public struct PptxReader {
     /// The media file name an image relationship points at, or nil unless all
     /// hold: the relationship is an internal image relationship, its target
     /// resolves (relative to `sourcePartPath`) to exactly `ppt/media/<name>`,
-    /// and that part exists as a regular file in the extracted package.
+    /// and that part passes `isRegularMediaFile` (a regular file, not a link,
+    /// really inside the package's `ppt/media`).
     static func resolvedMediaFileName(for rel: Rel, sourcePartPath: String, packageRoot: URL) -> String? {
         guard rel.isImage, !rel.isExternal,
               let partPath = resolvePartPath(target: rel.target, relativeTo: sourcePartPath) else { return nil }
         let segments = partPath.split(separator: "/")
         guard segments.count == 3, segments[0] == "ppt", segments[1] == "media" else { return nil }
 
-        var isDirectory: ObjCBool = false
-        let fileURL = packageRoot.appendingPathComponent(partPath)
-        guard FileManager.default.fileExists(atPath: fileURL.path, isDirectory: &isDirectory),
-              !isDirectory.boolValue else { return nil }
+        guard let realMedia = realMediaDirectory(packageRoot: packageRoot),
+              isRegularMediaFile(atPath: packageRoot.appendingPathComponent(partPath).path,
+                                 realMediaDirectory: realMedia) else { return nil }
         return String(segments[2])
+    }
+
+    // MARK: - Media file safety
+    //
+    // One check decides what counts as a media part, for both the picture →
+    // media link (`resolvedMediaFileName`) and the media read
+    // (`extractImages`): a regular file — by `lstat`, so a symbolic link,
+    // FIFO, socket, device or directory never qualifies and is never opened —
+    // whose real path is directly inside the package's real `ppt/media`.
+
+    /// Real path of the package's `ppt/media`, or nil when `ppt` or
+    /// `ppt/media` is missing, is not a directory, is a symbolic link, or
+    /// resolves outside the package root.
+    static func realMediaDirectory(packageRoot: URL) -> String? {
+        for component in ["ppt", "ppt/media"] {
+            guard fileType(atPath: packageRoot.appendingPathComponent(component).path) == S_IFDIR else {
+                return nil
+            }
+        }
+        guard let realRoot = realPath(packageRoot.path),
+              let realMedia = realPath(packageRoot.appendingPathComponent("ppt/media").path),
+              realMedia.hasPrefix(realRoot + "/") else { return nil }
+        return realMedia
+    }
+
+    /// Whether `path` is a regular file (not followed if it is a link) whose
+    /// real path lies directly inside `realMediaDirectory`.
+    static func isRegularMediaFile(atPath path: String, realMediaDirectory: String) -> Bool {
+        guard fileType(atPath: path) == S_IFREG, let real = realPath(path) else { return false }
+        return (real as NSString).deletingLastPathComponent == realMediaDirectory
+    }
+
+    /// `lstat` file type bits (`S_IFREG`, `S_IFDIR`, `S_IFLNK`, …), or nil.
+    private static func fileType(atPath path: String) -> mode_t? {
+        var info = stat()
+        guard lstat(path, &info) == 0 else { return nil }
+        return info.st_mode & S_IFMT
+    }
+
+    private static func realPath(_ path: String) -> String? {
+        guard let resolved = realpath(path, nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
     }
 
     /// Resolves a relationship `Target` to a package part name (OPC, ECMA-376
@@ -731,13 +778,12 @@ public struct PptxReader {
     // MARK: - Images
 
     private static func extractImages(from tempDir: URL) throws -> [MediaFile] {
+        // 與 resolvedMediaFileName 共用同一個檢查：只收真正位於 ppt/media/ 的一般檔案
+        // （lstat 判定，不跟隨 symlink；子目錄、FIFO 等一律略過且不開啟）
+        guard let realMedia = realMediaDirectory(packageRoot: tempDir) else { return [] }
         let mediaDir = tempDir.appendingPathComponent("ppt/media")
-        guard FileManager.default.fileExists(atPath: mediaDir.path) else { return [] }
-
-        let fileManager = FileManager.default
-        let files = try fileManager.contentsOfDirectory(at: mediaDir, includingPropertiesForKeys: [.isRegularFileKey])
-            // 只收 ppt/media/ 下的一般檔案；子目錄不是 media part，讀它會讓整份簡報開啟失敗
-            .filter { (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true }
+        let files = try FileManager.default.contentsOfDirectory(at: mediaDir, includingPropertiesForKeys: nil)
+            .filter { isRegularMediaFile(atPath: $0.path, realMediaDirectory: realMedia) }
 
         return try files.map { fileURL -> MediaFile in
             let data = try Data(contentsOf: fileURL)
