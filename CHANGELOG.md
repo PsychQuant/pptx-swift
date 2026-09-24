@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `PptxWriter` writes group shapes (#5). A `p:grpSp` used to serialize as nothing, so saving a presentation that contained a group silently dropped the group and every shape, picture and text box inside it. Groups now round-trip with nesting at any depth and their transform (`a:off` / `a:ext` / `a:chOff` / `a:chExt`). Pictures inside a group get image relationships from the same per-slide allocation as top-level pictures (one relationship per distinct media part; no duplicate or dangling `rId`).
+
+### Added
+
+- `GroupShape.childOffset` / `childExtent` (`a:chOff` / `a:chExt`). The `init` parameters default to `nil`, meaning equal to `position` / `size` (no scaling), so existing calls compile unchanged.
+- `Picture.externalImageTarget` for a linked picture (`<a:blip r:link>`), read only when the relationship is `TargetMode="External"`. `r:embed` and `r:link` are independent optional attributes of `CT_Blip` and may both be present (PowerPoint's "Insert and Link" keeps an embedded cache plus the link); the writer writes both.
+- `Slide.containsUnsupportedMedia`: the slide contains any DrawingML `EG_Media` element (`audioFile`, `videoFile`, `wavAudioFile`, `audioCd`, `quickTimeFile`) or a transition sound (`p:snd`). Namespaces are checked, not only local names.
+
+### Changed
+
+- **`PptxWriter.write` now throws `PPTXError.writeError` for a presentation with audio, video or a transition sound on any slide**, before creating any file. pptx-swift does not model playback (`p:timing`, `p14:media`), so such a slide used to be saved with its playback silently lost; it is now refused instead. A presentation that saved before may therefore fail to save now.
+
 ## [0.3.0] - 2026-09-24
 
 ### Added
