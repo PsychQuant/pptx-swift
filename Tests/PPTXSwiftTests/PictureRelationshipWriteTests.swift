@@ -87,34 +87,41 @@ struct PictureRelationshipWriteTests {
         let original = try PptxReader.read(from: source)
 
         // audio.pptx 含嵌入音訊：PptxWriter 拒絕寫出而不是默默遺失（#5），
-        // 沒有寫出的檔案就沒有 relationship 可驗證。
-        guard !original.slides.contains(where: { $0.containsUnsupportedMedia }) else {
-            let url = TemporaryPPTX.url("rt-\(file)")
-            defer { try? FileManager.default.removeItem(at: url) }
-            #expect(throws: PPTXError.self, "\(file) 含不支援的音訊／影片，寫出應拒絕") {
-                try PptxWriter.write(original, to: url)
+        // 沒有寫出的檔案就沒有 relationship 可驗證。分支條件用獨立宣告的
+        // 已知清單而不是直接讀 containsUnsupportedMedia，並額外斷言兩者一致，
+        // 這樣 reader 誤判（不論方向）都會被抓到，不會因為分支條件跟被測的
+        // 欄位是同一份資料而悄悄通過（Codex R1 MEDIUM，同 RealFileTests.roundTrip）。
+        let flagged = original.slides.contains(where: { $0.containsUnsupportedMedia })
+        let expectsUnsupported = RealFileTests.expectedUnsupportedMediaFiles.contains(file)
+        #expect(flagged == expectsUnsupported,
+                "\(file)：containsUnsupportedMedia=\(flagged)，但預期\(expectsUnsupported ? "" : "不")應被標記")
+        guard expectsUnsupported else {
+            try TemporaryPPTX.written(original, "rt") { url in
+                let package = try PackageInspector(url)
+                defer { package.cleanup() }
+                let violations = try package.integrityViolations()
+                #expect(violations == [], "\(file)")
+
+                let reread = try PptxReader.read(from: url)
+                try #require(reread.slides.count == original.slides.count)
+                for (index, (before, after)) in zip(original.slides, reread.slides).enumerated() {
+                    try #require(after.pictures.count == before.pictures.count, "\(file) slide \(index + 1)")
+                    for (p0, p1) in zip(before.pictures, after.pictures) {
+                        #expect(p1.id == p0.id)
+                        guard let media = original.mediaFile(for: p0) else { continue }
+                        let linked = reread.mediaFile(for: p1)
+                        #expect(linked?.data == media.data,
+                                "\(file) slide \(index + 1) picture id=\(p0.id) lost its media \(media.fileName)")
+                    }
+                }
             }
             return
         }
 
-        try TemporaryPPTX.written(original, "rt") { url in
-            let package = try PackageInspector(url)
-            defer { package.cleanup() }
-            let violations = try package.integrityViolations()
-            #expect(violations == [], "\(file)")
-
-            let reread = try PptxReader.read(from: url)
-            try #require(reread.slides.count == original.slides.count)
-            for (index, (before, after)) in zip(original.slides, reread.slides).enumerated() {
-                try #require(after.pictures.count == before.pictures.count, "\(file) slide \(index + 1)")
-                for (p0, p1) in zip(before.pictures, after.pictures) {
-                    #expect(p1.id == p0.id)
-                    guard let media = original.mediaFile(for: p0) else { continue }
-                    let linked = reread.mediaFile(for: p1)
-                    #expect(linked?.data == media.data,
-                            "\(file) slide \(index + 1) picture id=\(p0.id) lost its media \(media.fileName)")
-                }
-            }
+        let url = TemporaryPPTX.url("rt-\(file)")
+        defer { try? FileManager.default.removeItem(at: url) }
+        #expect(throws: PPTXError.self, "\(file) 含不支援的音訊／影片，寫出應拒絕") {
+            try PptxWriter.write(original, to: url)
         }
     }
 

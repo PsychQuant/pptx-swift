@@ -61,22 +61,40 @@ struct PictureLinkWriteTests {
         }
     }
 
-    @Test func `An embedded picture never also carries r:link`() throws {
-        // mediaFileName takes priority over externalImageTarget when (unusually)
-        // both are set — a blip is one or the other, never both.
+    @Test func `A picture with both an embedded cache and an external link round-trips both`() throws {
+        // CT_Blip's r:embed and r:link are independent optional attributes
+        // (ECMA-376 Part 1 §20.1.8.13), not alternatives: PowerPoint's
+        // "Insert and Link" produces exactly this — an embedded cached copy
+        // plus a link back to the original file. Dropping either on write
+        // would silently lose content (Codex review round 1, HIGH 1).
         let png = try GeneratedImage.png(width: 4, height: 4)
         var pres = PptxWriter.createNew()
         pres.images = [MediaFile(id: "p.png", fileName: "p.png", data: png)]
         pres.slides[0].elements = [
-            .picture(Picture(id: 2, mediaFileName: "p.png", externalImageTarget: "https://example.com/ignored.png")),
+            .picture(Picture(id: 2, mediaFileName: "p.png", externalImageTarget: "https://example.com/original.png")),
         ]
 
         try TemporaryPPTX.written(pres) { url in
             let package = try PackageInspector(url)
             defer { package.cleanup() }
             #expect(try package.integrityViolations() == [])
-            #expect(try package.blipLinks(in: "ppt/slides/slide1.xml") == [nil])
-            #expect(try package.blipEmbeds(in: "ppt/slides/slide1.xml").first ?? nil != nil)
+
+            let embed = try #require(try package.blipEmbeds(in: "ppt/slides/slide1.xml").first ?? nil)
+            let link = try #require(try package.blipLinks(in: "ppt/slides/slide1.xml").first ?? nil)
+            #expect(embed != link, "embed and link must be distinct relationships")
+
+            let embedRel = try #require(try package.relationships(of: "ppt/slides/slide1.xml").first { $0.id == embed })
+            #expect(!embedRel.isExternal)
+            #expect(package.resolve(embedRel, from: "ppt/slides/slide1.xml") == "ppt/media/p.png")
+
+            let linkRel = try #require(try package.relationships(of: "ppt/slides/slide1.xml").first { $0.id == link })
+            #expect(linkRel.isExternal)
+            #expect(linkRel.target == "https://example.com/original.png")
+
+            let reread = try PptxReader.read(from: url)
+            let picture = try #require(reread.slides[0].pictures.first)
+            #expect(reread.mediaFile(for: picture)?.data == png)
+            #expect(picture.externalImageTarget == "https://example.com/original.png")
         }
     }
 }

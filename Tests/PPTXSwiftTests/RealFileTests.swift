@@ -17,6 +17,13 @@ struct RealFileTests {
         ("Performance",    "perf.pptx",      "大簡報（效能測試）"),
     ]
 
+    /// 已知含 `a:audioFile`／`a:videoFile` 等的 fixture 檔名，獨立於
+    /// `Slide.containsUnsupportedMedia` 宣告——round trip 測試據此決定要不要
+    /// 預期寫出失敗，而不是直接讀該欄位當分支條件。兩者不一致時測試會明確報錯
+    /// （見 `roundTrip`），這樣 reader 誤判（不論方向）都會被抓到，不會因為
+    /// 分支條件跟被測的欄位是同一份資料而悄悄通過（Codex R1 MEDIUM）。
+    static let expectedUnsupportedMediaFiles: Set<String> = ["audio.pptx"]
+
     /// 從 Tests/Fixtures/ 取得 fixture 路徑
     static func fixturePath(_ file: String) -> URL? {
         // #file = Tests/PPTXSwiftTests/RealFileTests.swift → 往上一層到 Tests/，再進 Fixtures/
@@ -81,25 +88,26 @@ struct RealFileTests {
 
         // audio.pptx 含嵌入音訊（a:audioFile + p:timing 播放觸發）：pptx-swift 不建模這層，
         // PptxWriter 拒絕寫出而不是默默遺失（PsychQuant/pptx-swift#5），round trip 因此預期失敗。
-        guard !pres.slides.contains(where: { $0.containsUnsupportedMedia }) else {
-            #expect(throws: PPTXError.self, "\(file.name) 含不支援的音訊／影片，寫出應拒絕") {
-                try PptxWriter.write(pres, to: tempURL)
-            }
-            #expect(!FileManager.default.fileExists(atPath: tempURL.path), "\(file.name) 寫出失敗不應留下檔案")
-            print("   \(file.name): 含音訊／影片，寫出如預期被拒絕")
+        let flagged = pres.slides.contains(where: { $0.containsUnsupportedMedia })
+        let expectsUnsupported = Self.expectedUnsupportedMediaFiles.contains(file.file)
+        #expect(flagged == expectsUnsupported,
+                "\(file.name)：containsUnsupportedMedia=\(flagged)，但預期\(expectsUnsupported ? "" : "不")應被標記")
+        guard expectsUnsupported else {
+            try PptxWriter.write(pres, to: tempURL)
+            let fileSize = try FileManager.default.attributesOfItem(atPath: tempURL.path)[.size] as? Int ?? 0
+            #expect(fileSize > 0, "\(file.name) round-trip 輸出不應為空")
+            let reread = try PptxReader.read(from: tempURL)
+            #expect(reread.slideCount == pres.slideCount,
+                    "\(file.name) round-trip slides: \(reread.slideCount) vs \(pres.slideCount)")
+            print("   \(file.name): \(pres.slideCount) slides → \(fileSize) bytes → \(reread.slideCount) slides ✓")
             return
         }
 
-        try PptxWriter.write(pres, to: tempURL)
-
-        let fileSize = try FileManager.default.attributesOfItem(atPath: tempURL.path)[.size] as? Int ?? 0
-        #expect(fileSize > 0, "\(file.name) round-trip 輸出不應為空")
-
-        let reread = try PptxReader.read(from: tempURL)
-        #expect(reread.slideCount == pres.slideCount,
-                "\(file.name) round-trip slides: \(reread.slideCount) vs \(pres.slideCount)")
-
-        print("   \(file.name): \(pres.slideCount) slides → \(fileSize) bytes → \(reread.slideCount) slides ✓")
+        #expect(throws: PPTXError.self, "\(file.name) 含不支援的音訊／影片，寫出應拒絕") {
+            try PptxWriter.write(pres, to: tempURL)
+        }
+        #expect(!FileManager.default.fileExists(atPath: tempURL.path), "\(file.name) 寫出失敗不應留下檔案")
+        print("   \(file.name): 含音訊／影片，寫出如預期被拒絕")
     }
 
     @Test("表格解析 — table.pptx")

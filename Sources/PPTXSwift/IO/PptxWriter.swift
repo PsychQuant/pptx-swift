@@ -366,13 +366,17 @@ public struct PptxWriter {
         case .shape(let shape):
             return serializeShape(shape, nextId: &nextId)
         case .picture(let picture):
-            if let embedId = try imageRels.embedId(for: picture) {
-                return try serializePicture(picture, blip: .embed(embedId), nextId: &nextId)
-            }
-            if let target = picture.externalImageTarget, !target.isEmpty {
-                return try serializePicture(picture, blip: .link(imageRels.linkId(for: target)), nextId: &nextId)
-            }
-            return try serializePicture(picture, blip: .none, nextId: &nextId)
+            // CT_Blip's r:embed and r:link are independent optional attributes
+            // (ECMA-376 Part 1 §20.1.8.13), not alternatives: a picture linked
+            // with a local cached copy ("Insert and Link" in PowerPoint) has
+            // both, and both must survive a round trip (Codex review round 1,
+            // HIGH 1 — the writer previously always preferred embed and
+            // silently dropped a coexisting link).
+            let embedId = try imageRels.embedId(for: picture)
+            let linkId: String? = (picture.externalImageTarget.map { !$0.isEmpty } ?? false)
+                ? imageRels.linkId(for: picture.externalImageTarget!)
+                : nil
+            return try serializePicture(picture, embedId: embedId, linkId: linkId, nextId: &nextId)
         case .graphicFrame(let frame):
             return serializeGraphicFrame(frame, nextId: &nextId)
         case .group(let group):
@@ -465,25 +469,20 @@ public struct PptxWriter {
         """
     }
 
-    /// Which relationship (if any) a picture's `<a:blip>` carries — the
-    /// relationship Id this slide's rels give the picture's media part
-    /// (`r:embed`), the Id of an external-link relationship (`r:link`), or
-    /// neither. Never a reference to a relationship that does not exist.
-    enum PictureBlipReference {
-        case embed(String)
-        case link(String)
-        case none
-    }
-
-    private static func serializePicture(_ picture: Picture, blip: PictureBlipReference, nextId: inout Int) throws -> String {
+    /// `embedId`／`linkId` are the relationship Ids this slide's rels give
+    /// the picture's media part (`r:embed`) and external link (`r:link`)
+    /// respectively — independent OOXML attributes (`CT_Blip`, ECMA-376
+    /// Part 1 §20.1.8.13), not alternatives: a picture inserted as "linked
+    /// with a local cache" carries both, and a nil one is simply omitted.
+    /// `<a:blip/>` with neither is a picture with no media at all, never a
+    /// reference to a relationship that does not exist.
+    private static func serializePicture(_ picture: Picture, embedId: String?, linkId: String?, nextId: inout Int) throws -> String {
         let id = picture.id > 0 ? picture.id : nextId
         nextId = max(nextId, id + 1)
-        let blipXML: String
-        switch blip {
-        case .embed(let embedId): blipXML = "<a:blip r:embed=\"\(embedId)\"/>"
-        case .link(let linkId): blipXML = "<a:blip r:link=\"\(linkId)\"/>"
-        case .none: blipXML = "<a:blip/>"
-        }
+        var blipAttrs = ""
+        if let embedId { blipAttrs += " r:embed=\"\(embedId)\"" }
+        if let linkId { blipAttrs += " r:link=\"\(linkId)\"" }
+        let blipXML = blipAttrs.isEmpty ? "<a:blip/>" : "<a:blip\(blipAttrs)/>"
         // CT_BlipFillProperties order: blip, srcRect, then the fill mode (#2)
         let srcRectXML = try picture.sourceRect.map { try serializeSourceRect($0, pictureId: id) } ?? ""
 
