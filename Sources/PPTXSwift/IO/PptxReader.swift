@@ -34,18 +34,21 @@ public struct PptxReader {
     private static let nsP = "http://schemas.openxmlformats.org/presentationml/2006/main"
 
     /// An `xsd:boolean` attribute value. The lexical space is `{true, false,
-    /// 1, 0}` (case-sensitive) with the `whiteSpace` facet `collapse` — a
-    /// producer may pad the value with leading/trailing XML whitespace
-    /// (`" true "`) and it still means `true`. Accepting both spellings is
-    /// slightly more permissive than strictly necessary, on the theory that
-    /// a reader should never reject a file over which of the two equally
-    /// valid forms a producer chose to emit — `PptxWriter` itself always
-    /// emits `"1"`. Anything else (including an absent attribute) is
-    /// `false`, matching the schema default for `flipH`／`flipV`
-    /// (Codex review round 1, LOW: the original version compared the raw,
-    /// untrimmed string).
+    /// 1, 0}` (case-sensitive; both `"1"` and `"true"` are ordinary XSD
+    /// compliance, not extra permissiveness) with the `whiteSpace` facet
+    /// `collapse` — a producer may pad the value with leading/trailing XML
+    /// whitespace (`" true "`) and it still means `true`; `PptxWriter` itself
+    /// always emits the bare `"1"`. Anything else (including an absent
+    /// attribute) is `false`, matching the schema default for `flipH`／
+    /// `flipV`. Trims only the four XML whitespace characters (space, tab,
+    /// CR, LF) — not `.whitespacesAndNewlines`, which also strips Unicode
+    /// whitespace (e.g. non-breaking space) outside XSD's whiteSpace facet
+    /// and would accept lexically-invalid input as if it were padded
+    /// (Codex review round 1 LOW fixed the missing trim; round 2 LOW
+    /// tightened the trim set to match the XSD facet exactly).
     static func parseXSDBoolean(_ value: String?) -> Bool {
-        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) else { return false }
+        let xmlWhitespace = CharacterSet(charactersIn: " \t\r\n")
+        guard let trimmed = value?.trimmingCharacters(in: xmlWhitespace) else { return false }
         return trimmed == "1" || trimmed == "true"
     }
 

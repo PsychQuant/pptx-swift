@@ -341,4 +341,26 @@ struct XfrmRotationFlipTests {
             #expect(rereadRotations == originalRotations)
         }
     }
+
+    // MARK: - Scenario: parseXSDBoolean's whitespace handling
+
+    /// Direct unit coverage for `PptxReader.parseXSDBoolean` (Codex review
+    /// round 2 LOW: the round-1 fix trimmed with `.whitespacesAndNewlines`,
+    /// which also strips Unicode whitespace like U+00A0 NO-BREAK SPACE —
+    /// outside `xsd:boolean`'s `whiteSpace: collapse` facet, whose lexical
+    /// space is only space／tab／CR／LF — so a non-breaking-space-padded
+    /// value would have been accepted as if it were validly padded. Fixed to
+    /// trim only the four XML whitespace characters; this test locks that in
+    /// and, per the same review round, exercises XML padding and a token
+    /// that collapse cannot repair (an internal space splitting the word).
+    @Test(arguments: [
+        (" true ", true), ("\ttrue\n", true), ("1", true), (" 1 ", true),
+        ("true", true), ("false", false), ("0", false), (" 0 ", false),
+        ("tr ue", false),        // collapse cannot join a split token
+        ("\u{00A0}true\u{00A0}", false),  // non-breaking space is not XML whitespace
+        (nil, false),
+    ])
+    func `parseXSDBoolean trims only XML whitespace and rejects everything else`(value: String?, expected: Bool) {
+        #expect(PptxReader.parseXSDBoolean(value) == expected)
+    }
 }
