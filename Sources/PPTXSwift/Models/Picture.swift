@@ -13,8 +13,10 @@ public struct Picture {
     public var mediaFileName: String?
     /// 外部連結圖片（`<a:blip r:link="...">`）所指的原始 Target（通常是 URL 或外部
     /// 檔案路徑）。讀檔時只在該 relationship 確實是 external（`TargetMode="External"`）
-    /// 時才設定；有 `mediaFileName`（embedded）時本欄位為 nil——一張圖片不會同時是
-    /// embedded 又是 external link。
+    /// 時才設定。`CT_Blip` 的 `r:embed`／`r:link` 是各自獨立的可選屬性（ECMA-376
+    /// Part 1 §20.1.8.13），**可以同時出現**——PowerPoint「插入並連結」會同時留下
+    /// 內嵌快取（`mediaFileName`）與指回原始檔案的連結（本欄位）；`PptxWriter` 兩者
+    /// 都會寫出，不會因為有 `mediaFileName` 就丟掉本欄位（反之亦然）。
     public var externalImageTarget: String?
     /// `<a:srcRect>` of the picture's `blipFill` (crop); nil when absent.
     public var sourceRect: PictureSourceRect?
