@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-24
+
 ### Added
 
 - `Shape`, `Picture`, `GraphicFrame` and `GroupShape` model `a:xfrm` (`GraphicFrame`'s is `p:xfrm`, same `a:CT_Transform2D` type) `rot` / `flipH` / `flipV` as `rotation: Int` (`ST_Angle`, 60,000ths of a degree, read as-is with no range restriction), `flipHorizontal: Bool`, `flipVertical: Bool` (#7). `init` parameters default to `0` / `false` / `false`, so existing calls compile unchanged. `PptxReader` reads all three from the element's own attributes (not its `off`/`ext` children); `PptxWriter` writes them back, omitting the attribute entirely when it equals the schema default, so an unrotated, unflipped element's `<a:xfrm>`/`<p:xfrm>` opening tag stays byte-identical to before this change. `PptxWriter` normalizes `rotation` into the canonical `[0, 21_600_000)` range (one full turn) via Euclidean modulo before writing — `ST_Angle` is an unrestricted `xsd:int`, so a value outside that range is schema-valid but names the same angle as its residue inside it; `PptxReader` never normalizes on the way in.
