@@ -94,8 +94,11 @@ public enum ShapeGeometry: String {
     case unknown
 
     // 連接線專用的預設幾何（PsychQuant/pptx-swift#9）。ECMA-376 `ST_ShapeType`
-    // 定義的連接線子集合，共 9 種，是封閉列舉——PowerPoint 的「連接線」工具只會
-    // 產生這幾種 `prst` 值。
+    // 定義的「彎折／曲線連接線」子集合，共 9 種，是封閉列舉。連接線也可以用
+    // 上面已有的 `line`（純直線，無彎折點）——`shapes.pptx` 的三個連接線裡
+    // 就有一個是 `prst="line"`——這 9 種只補上 `line` 沒涵蓋的彎折／曲線變化，
+    // 不是「連接線只會出現這 9 種」（Codex round 1 review 指出既有措辭過強，
+    // 已更正）。
     case straightConnector1
     case bentConnector2
     case bentConnector3

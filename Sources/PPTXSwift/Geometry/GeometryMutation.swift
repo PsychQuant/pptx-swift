@@ -69,7 +69,20 @@ public extension Slide {
     /// Locates an element by id. Top-level elements take precedence over
     /// group members that happen to share the id.
     func locateElement(id: Int) -> SlideElementLocation {
-        if let index = elements.firstIndex(where: { $0.elementId == id }) {
+        // Not `allElementIds` here: that recurses into a `.group`'s
+        // descendants, which would make an id nested inside a group match at
+        // `.topLevel` (the group's own array index) instead of
+        // `.groupChild` — the two cases exist precisely to keep that
+        // distinction. A top-level `.raw` element is the one real exception:
+        // it can carry more than one id of its own (no nesting involved), so
+        // it needs all of them checked, not just `elementId`'s first
+        // (PsychQuant/pptx-swift#9 — Codex round 1 review caught that using
+        // `elementId` here would report a top-level raw element's *second*
+        // id as simply not found).
+        if let index = elements.firstIndex(where: { element in
+            if case .raw(let raw) = element { return raw.elementIds.contains(id) }
+            return element.elementId == id
+        }) {
             return .topLevel(index: index)
         }
         for element in elements {
