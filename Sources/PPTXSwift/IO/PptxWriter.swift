@@ -69,6 +69,39 @@ public struct PptxWriter {
         }
     }
 
+    /// Normalizes an `ST_Angle` value (60,000ths of a degree) into the
+    /// canonical non-negative range `[0, fullTurn)`. `ST_Angle` itself is an
+    /// unrestricted `xsd:int` (ECMA-376 Part 1 §20.1.10.3) — every 32-bit
+    /// value is schema-valid, so there is nothing to reject — but a rotation
+    /// is periodic modulo one full turn, so a value outside this range names
+    /// the exact same angle as its residue inside it. PowerPoint itself only
+    /// ever emits values in `[0, fullTurn)`; normalizing on write keeps our
+    /// output conventional without losing anything a renderer acts on.
+    static func normalizedAngle(_ rawUnits: Int) -> Int {
+        let fullTurn = 21_600_000
+        let remainder = rawUnits % fullTurn
+        return remainder < 0 ? remainder + fullTurn : remainder
+    }
+
+    /// The `rot`／`flipH`／`flipV` attributes to splice into an `<a:xfrm>`／
+    /// `<p:xfrm>` opening tag, or the empty string when all three are at
+    /// their schema default (0／false／false) — omitting the attributes
+    /// entirely rather than writing them out at their default value keeps
+    /// an unrotated, unflipped element's output byte-identical to before
+    /// this support existed (PsychQuant/pptx-swift#7).
+    static func xfrmTransformAttributes(rotation: Int, flipHorizontal: Bool, flipVertical: Bool) -> String {
+        var attrs = ""
+        let normalized = normalizedAngle(rotation)
+        // Compare the *normalized* value to 0, not the raw one: a raw value
+        // like -21_600_000 (a full turn backwards) normalizes to 0 and must
+        // be omitted exactly like an ordinary unrotated element, not written
+        // out as a literal `rot="0"`.
+        if normalized != 0 { attrs += " rot=\"\(normalized)\"" }
+        if flipHorizontal { attrs += " flipH=\"1\"" }
+        if flipVertical { attrs += " flipV=\"1\"" }
+        return attrs
+    }
+
     /// 建立新的空白簡報
     public static func createNew() -> Presentation {
         var presentation = Presentation()
@@ -401,6 +434,9 @@ public struct PptxWriter {
             childXML += try serializeElement(element, nextId: &nextId, imageRels: &imageRels)
         }
 
+        let xfrmAttrs = xfrmTransformAttributes(
+            rotation: group.rotation, flipHorizontal: group.flipHorizontal, flipVertical: group.flipVertical)
+
         return """
               <p:grpSp>
                 <p:nvGrpSpPr>
@@ -409,7 +445,7 @@ public struct PptxWriter {
                   <p:nvPr/>
                 </p:nvGrpSpPr>
                 <p:grpSpPr>
-                  <a:xfrm>
+                  <a:xfrm\(xfrmAttrs)>
                     <a:off x="\(group.position.x)" y="\(group.position.y)"/>
                     <a:ext cx="\(group.size.width)" cy="\(group.size.height)"/>
                     <a:chOff x="\(group.childOffset.x)" y="\(group.childOffset.y)"/>
@@ -449,6 +485,9 @@ public struct PptxWriter {
             textBodyXML = serializeTextBody(textBody)
         }
 
+        let xfrmAttrs = xfrmTransformAttributes(
+            rotation: shape.rotation, flipHorizontal: shape.flipHorizontal, flipVertical: shape.flipVertical)
+
         return """
               <p:sp>
                 <p:nvSpPr>
@@ -457,7 +496,7 @@ public struct PptxWriter {
                   <p:nvPr>\(phXML)</p:nvPr>
                 </p:nvSpPr>
                 <p:spPr>
-                  <a:xfrm>
+                  <a:xfrm\(xfrmAttrs)>
                     <a:off x="\(shape.position.x)" y="\(shape.position.y)"/>
                     <a:ext cx="\(shape.size.width)" cy="\(shape.size.height)"/>
                   </a:xfrm>
@@ -486,6 +525,8 @@ public struct PptxWriter {
         let blipXML = blipAttrs.isEmpty ? "<a:blip/>" : "<a:blip\(blipAttrs)/>"
         // CT_BlipFillProperties order: blip, srcRect, then the fill mode (#2)
         let srcRectXML = try picture.sourceRect.map { try serializeSourceRect($0, pictureId: id) } ?? ""
+        let xfrmAttrs = xfrmTransformAttributes(
+            rotation: picture.rotation, flipHorizontal: picture.flipHorizontal, flipVertical: picture.flipVertical)
 
         return """
               <p:pic>
@@ -499,7 +540,7 @@ public struct PptxWriter {
                   <a:stretch><a:fillRect/></a:stretch>
                 </p:blipFill>
                 <p:spPr>
-                  <a:xfrm>
+                  <a:xfrm\(xfrmAttrs)>
                     <a:off x="\(picture.position.x)" y="\(picture.position.y)"/>
                     <a:ext cx="\(picture.size.width)" cy="\(picture.size.height)"/>
                   </a:xfrm>
@@ -547,6 +588,9 @@ public struct PptxWriter {
             rowsXML += "          </a:tr>\n"
         }
 
+        let xfrmAttrs = xfrmTransformAttributes(
+            rotation: frame.rotation, flipHorizontal: frame.flipHorizontal, flipVertical: frame.flipVertical)
+
         return """
               <p:graphicFrame>
                 <p:nvGraphicFramePr>
@@ -554,7 +598,7 @@ public struct PptxWriter {
                   <p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr>
                   <p:nvPr/>
                 </p:nvGraphicFramePr>
-                <p:xfrm>
+                <p:xfrm\(xfrmAttrs)>
                   <a:off x="\(frame.position.x)" y="\(frame.position.y)"/>
                   <a:ext cx="\(frame.size.width)" cy="\(frame.size.height)"/>
                 </p:xfrm>
