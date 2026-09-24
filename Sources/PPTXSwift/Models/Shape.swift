@@ -8,6 +8,14 @@ public struct Shape {
     public var geometry: ShapeGeometry
     public var position: Position
     public var size: Size
+    /// 旋轉角度（`a:xfrm` 的 `rot`，ECMA-376 `ST_Angle`：以 60,000 分之一度為單位的
+    /// 整數，順時針為正）。`ST_Angle` 是不限範圍的 `xsd:int`（見 `PptxWriter` 正規化
+    /// 說明），讀取時原樣保留；0（schema 預設）表示未旋轉，寫出時省略 `rot` 屬性。
+    public var rotation: Int
+    /// 是否沿垂直軸水平翻轉（`a:xfrm` 的 `flipH`）。
+    public var flipHorizontal: Bool
+    /// 是否沿水平軸垂直翻轉（`a:xfrm` 的 `flipV`）。
+    public var flipVertical: Bool
     public var fill: ShapeFill?
     public var outline: ShapeOutline?
     public var textBody: TextBody?
@@ -19,6 +27,9 @@ public struct Shape {
         geometry: ShapeGeometry = .rect,
         position: Position = Position(),
         size: Size = Size(),
+        rotation: Int = 0,
+        flipHorizontal: Bool = false,
+        flipVertical: Bool = false,
         fill: ShapeFill? = nil,
         outline: ShapeOutline? = nil,
         textBody: TextBody? = nil
@@ -29,6 +40,9 @@ public struct Shape {
         self.geometry = geometry
         self.position = position
         self.size = size
+        self.rotation = rotation
+        self.flipHorizontal = flipHorizontal
+        self.flipVertical = flipVertical
         self.fill = fill
         self.outline = outline
         self.textBody = textBody

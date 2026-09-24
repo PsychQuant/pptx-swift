@@ -14,6 +14,17 @@ public struct GroupShape {
     public var childOffset: Position
     /// 子座標系的大小（`a:chExt`）。未指定時預設等於 `size`（即無縮放）。
     public var childExtent: Size
+    /// 旋轉角度（`a:xfrm` 的 `rot`，ECMA-376 `ST_Angle`：以 60,000 分之一度為單位的
+    /// 整數，順時針為正）。群組的 `grpSpPr/a:xfrm` 型別是 `a:CT_GroupTransform2D`
+    /// （比 `CT_Transform2D` 多 `chOff`／`chExt`），`rot`／`flipH`／`flipV` 三個屬性與
+    /// 一般形狀完全相同、套用在群組整體的外框（`position`／`size`）上，不影響子座標系
+    /// 的縮放平移（`childOffset`／`childExtent`）換算。讀取時原樣保留；0（schema 預設）
+    /// 表示未旋轉，寫出時省略 `rot` 屬性。正規化規則見 `PptxWriter`。
+    public var rotation: Int
+    /// 是否沿垂直軸水平翻轉（`a:xfrm` 的 `flipH`）。
+    public var flipHorizontal: Bool
+    /// 是否沿水平軸垂直翻轉（`a:xfrm` 的 `flipV`）。
+    public var flipVertical: Bool
     public var elements: [SlideElement]
 
     public init(
@@ -23,6 +34,9 @@ public struct GroupShape {
         size: Size = Size(),
         childOffset: Position? = nil,
         childExtent: Size? = nil,
+        rotation: Int = 0,
+        flipHorizontal: Bool = false,
+        flipVertical: Bool = false,
         elements: [SlideElement] = []
     ) {
         self.id = id
@@ -31,6 +45,9 @@ public struct GroupShape {
         self.size = size
         self.childOffset = childOffset ?? position
         self.childExtent = childExtent ?? size
+        self.rotation = rotation
+        self.flipHorizontal = flipHorizontal
+        self.flipVertical = flipVertical
         self.elements = elements
     }
 
