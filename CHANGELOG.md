@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-24
+
 ### Added
 
 - `PictureSourceRect` models a picture's crop, its `blipFill` `<a:srcRect>` (#2): `left` / `top` / `right` / `bottom` in thousandths of a percent (`100_000` = 100 %; negative extends), with `visibleWidthFraction` / `visibleHeightFraction`. `Picture.sourceRect` holds it (`init` parameter defaults to `nil`). `PptxReader` reads both the integer form (`52941`) and the strict percent-string form (`52.941%`); `PptxWriter` writes it back between `a:blip` and `a:stretch`, so a crop now survives a round trip.
