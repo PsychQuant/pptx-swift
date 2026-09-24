@@ -6,12 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `PictureSourceRect` models a picture's crop, its `blipFill` `<a:srcRect>` (#2): `left` / `top` / `right` / `bottom` in thousandths of a percent (`100_000` = 100 %; negative extends), with `visibleWidthFraction` / `visibleHeightFraction`. `Picture.sourceRect` holds it (`init` parameter defaults to `nil`). `PptxReader` reads both the integer form (`52941`) and the strict percent-string form (`52.941%`); `PptxWriter` writes it back between `a:blip` and `a:stretch`, so a crop now survives a round trip.
+- `NativeAspect.visibleDimensions(pixelWidth:pixelHeight:crop:)` returns the size of the part a crop leaves visible, and throws `PPTXError.invalidParameter("srcRect", …)` when nothing is left.
+- `NativeAspect.fittedSize(keeping:of:pixelWidth:pixelHeight:crop:)` takes an optional crop (default `nil`, so existing calls compile unchanged) and keeps the aspect of the visible part.
+
 ### Fixed
 
 - `PptxWriter` links every picture it writes to its media part (#1). Each slide's `slideN.xml.rels` now carries one image relationship per distinct media part its pictures use (`rId1` stays the slide layout; images take `rId2` upward), and `r:embed` points at that relationship. Before this, `r:embed` kept the Id from the source package or the caller, and no image relationship was written at all, so every saved picture — inserted in memory or read from a file — pointed at a missing relationship and PowerPoint had to repair the file.
 - Every `ppt/media/` part gets a content type (#1). Extensions in the known table (`png`, `jpg`/`jpeg`, `gif`, `bmp`, `tif`/`tiff`, `emf`, `wmf`, `svg`, `pdf`, audio/video, …) are registered as `Default` entries; any other part gets an `Override` typed by sniffing its bytes with ImageIO, or `application/octet-stream`. Before this, only `png` and `jpeg`/`jpg` were registered, so a package holding a `gif`, `wmf`, `pdf` or `mp3` part was invalid.
 - Media file names are no longer used as paths (#1). A `MediaFile.fileName` that is not a safe part name (anything other than ASCII letters, digits, `.`, `_`, `-`; a leading or trailing `.`; an `xml`/`rels` extension) or that equals another one case-insensitively is written as `imageN.<ext>`. Before this, a name such as `../../x.png` was written outside `ppt/media/`. Names PowerPoint itself produces (`image1.png`, …) are kept.
 - Only the first `MediaFile` per `fileName` is written, matching `Presentation.mediaFile(for:)`; before, a later duplicate silently replaced the bytes a picture resolved to.
+- `NativeAspect.pixelDimensions(of:)` reports the image as displayed (#2): an EXIF orientation of 5–8 (a 90° or 270° turn) swaps width and height. A portrait photo stored as a landscape pixel grid used to be measured, and fitted, as landscape.
+- `NativeAspect.fittedSize` no longer fits a cropped picture to the whole image's aspect when given the picture's crop (#2).
 
 ### Changed
 

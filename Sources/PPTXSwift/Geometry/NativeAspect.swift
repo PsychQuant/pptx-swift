@@ -4,11 +4,17 @@ import ImageIO
 /// Native pixel dimensions of embedded image media, read through ImageIO.
 public enum NativeAspect {
 
-    /// Reads the pixel width and height of `imageData` from its image header.
+    /// Reads the pixel width and height of `imageData` **as displayed**, from
+    /// its image header.
     ///
     /// Uses `CGImageSourceCopyPropertiesAtIndex` (`kCGImagePropertyPixelWidth` /
     /// `kCGImagePropertyPixelHeight`) with caching disabled, so the bitmap itself
     /// is never decoded — the cost is a header read, independent of image size.
+    ///
+    /// The stored pixel grid is turned upright by the image's EXIF orientation
+    /// (`kCGImagePropertyOrientation`): orientations 5–8 rotate by 90° or 270°
+    /// (with or without a mirror), so width and height are swapped; 1–4 and an
+    /// absent or unrecognised orientation keep them (#2).
     ///
     /// - Throws: `PPTXError.undecodableImage` when ImageIO cannot identify the
     ///   data as a raster image (including vector metafiles such as EMF/WMF), or
@@ -34,7 +40,14 @@ public enum NativeAspect {
             throw PPTXError.undecodableImage("ImageIO 讀不出像素尺寸（格式：\(type)）")
         }
 
-        return (width, height)
+        return swapsAxes(orientation: properties[kCGImagePropertyOrientation]) ? (height, width) : (width, height)
+    }
+
+    /// Whether an EXIF orientation value turns the image by 90° or 270°
+    /// (values 5–8: transpose, rotate 90° CW, transverse, rotate 90° CCW).
+    static func swapsAxes(orientation value: Any?) -> Bool {
+        guard let orientation = (value as? NSNumber)?.intValue else { return false }
+        return (5...8).contains(orientation)
     }
 
     /// Best-effort format label for error messages. Recognises the vector
@@ -63,17 +76,26 @@ public enum AspectAnchor: String, CaseIterable {
 
 public extension NativeAspect {
     /// Keeps the anchored dimension of `size` and derives the other from the
-    /// image's pixel aspect ratio, rounding half away from zero to whole EMU.
+    /// aspect ratio of the visible image, rounding half away from zero to
+    /// whole EMU.
+    ///
+    /// The visible image is the `pixelWidth` × `pixelHeight` image (as
+    /// displayed — see `pixelDimensions(of:)`) cropped by `crop`, the
+    /// picture's `<a:srcRect>`: `a:stretch` fills the frame with that part
+    /// only, so it is the part whose aspect the frame must keep (#2).
     ///
     /// Example: a 1600 × 1200 image anchored at width 3,600,000 EMU (10 cm)
-    /// yields height 2,700,000 EMU (7.5 cm).
+    /// yields height 2,700,000 EMU (7.5 cm); with 12.5 % cropped off the left
+    /// and the right, 1200 × 1200 is visible and the height is 3,600,000 EMU.
     ///
     /// - Throws: `PPTXError.invalidParameter` when the pixel dimensions are not
-    ///   positive, or when the anchored dimension (checked before any
-    ///   arithmetic) or the derived dimension lies outside
+    ///   positive, when `crop` leaves no visible width or height
+    ///   (parameter `srcRect`), or when the anchored dimension (checked before
+    ///   any arithmetic) or the derived dimension lies outside
     ///   `1 ... PPTXMetric.maxCoordinateEmu`.
     static func fittedSize(
-        keeping anchor: AspectAnchor, of size: Size, pixelWidth: Int, pixelHeight: Int
+        keeping anchor: AspectAnchor, of size: Size, pixelWidth: Int, pixelHeight: Int,
+        crop: PictureSourceRect? = nil
     ) throws -> Size {
         guard pixelWidth > 0, pixelHeight > 0 else {
             throw PPTXError.invalidParameter(
@@ -88,9 +110,10 @@ public extension NativeAspect {
             )
         }
 
+        let visible = try visibleDimensions(pixelWidth: pixelWidth, pixelHeight: pixelHeight, crop: crop)
         let ratio = anchor == .width
-            ? Double(pixelHeight) / Double(pixelWidth)
-            : Double(pixelWidth) / Double(pixelHeight)
+            ? visible.height / visible.width
+            : visible.width / visible.height
         let derived = (Double(anchored) * ratio).rounded()
         guard derived >= 1, derived <= Double(PPTXMetric.maxCoordinateEmu) else {
             throw PPTXError.invalidParameter(
@@ -102,5 +125,31 @@ public extension NativeAspect {
         return anchor == .width
             ? Size(width: anchored, height: Int(derived))
             : Size(width: Int(derived), height: anchored)
+    }
+}
+
+// MARK: - Crop
+
+public extension NativeAspect {
+    /// The size, in pixels, of the part of a `pixelWidth` × `pixelHeight`
+    /// image that `crop` leaves visible: each dimension times its visible
+    /// fraction (`PictureSourceRect.visibleWidthFraction` /
+    /// `visibleHeightFraction`). A nil crop is the whole image.
+    ///
+    /// - Throws: `PPTXError.invalidParameter` (parameter `srcRect`) when the
+    ///   crop leaves a width or height that is zero or negative.
+    static func visibleDimensions(
+        pixelWidth: Int, pixelHeight: Int, crop: PictureSourceRect?
+    ) throws -> (width: Double, height: Double) {
+        guard let crop else { return (Double(pixelWidth), Double(pixelHeight)) }
+        let widthFraction = crop.visibleWidthFraction
+        let heightFraction = crop.visibleHeightFraction
+        guard widthFraction > 0, heightFraction > 0 else {
+            throw PPTXError.invalidParameter(
+                "srcRect",
+                "裁切後沒有可見區域（l=\(crop.left) t=\(crop.top) r=\(crop.right) b=\(crop.bottom)，單位千分之一百分比）"
+            )
+        }
+        return (Double(pixelWidth) * widthFraction, Double(pixelHeight) * heightFraction)
     }
 }

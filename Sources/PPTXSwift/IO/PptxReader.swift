@@ -440,6 +440,9 @@ public struct PptxReader {
                 .mediaFileName
         }
 
+        // Crop (#2)
+        picture.sourceRect = try parseSourceRect(element)
+
         // Position and size
         if let spPr = try element.nodes(forXPath: "./*[local-name()='spPr']").first as? XMLElement {
             var fill: ShapeFill? = nil
@@ -450,6 +453,37 @@ public struct PptxReader {
         }
 
         return picture
+    }
+
+    /// `<a:srcRect>` of a picture's `blipFill`, or nil when there is none.
+    /// An edge that is absent or unparsable takes the schema default, 0.
+    private static func parseSourceRect(_ pic: XMLElement) throws -> PictureSourceRect? {
+        guard let srcRect = try pic.nodes(
+            forXPath: "./*[local-name()='blipFill']/*[local-name()='srcRect']"
+        ).first as? XMLElement else { return nil }
+        func edge(_ name: String) -> Int {
+            srcRect.attribute(forName: name)?.stringValue.flatMap(parsePercentage) ?? 0
+        }
+        return PictureSourceRect(left: edge("l"), top: edge("t"), right: edge("r"), bottom: edge("b"))
+    }
+
+    /// An `ST_Percentage` value in thousandths of a percent. Accepts both
+    /// forms the schemas allow: the transitional integer (`"52941"`) and the
+    /// strict percent string (`"52.941%"`, rounded to the nearest
+    /// thousandth). Returns nil for anything else, including values outside
+    /// the 32-bit range `xsd:int` allows.
+    static func parsePercentage(_ text: String) -> Int? {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        let value: Double
+        if trimmed.hasSuffix("%") {
+            guard let percent = Double(trimmed.dropLast()), percent.isFinite else { return nil }
+            value = (percent * 1000).rounded()
+        } else {
+            guard let integer = Int(trimmed) else { return nil }
+            value = Double(integer)
+        }
+        guard value >= Double(Int32.min), value <= Double(Int32.max) else { return nil }
+        return Int(value)
     }
 
     // MARK: - Graphic Frame (Table)
