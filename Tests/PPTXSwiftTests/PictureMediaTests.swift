@@ -36,7 +36,8 @@ struct PictureMediaTests {
     /// cropped.pptx with its single image relationship (rId2, `../media/image1.png`)
     /// rewritten, and optional extra files dropped into the package.
     static func tamperedCropped(
-        relationship: String?, extraFiles: [String: Data] = [:], renames: [String: String] = [:]
+        relationship: String?, extraFiles: [String: Data] = [:], renames: [String: String] = [:],
+        contentTypeOverrides: [String: String] = [:]
     ) throws -> URL {
         let fixture = try #require(RealFileTests.fixturePath("cropped.pptx"))
         let dir = try ZipHelper.unzip(fixture)
@@ -56,6 +57,13 @@ struct PictureMediaTests {
             let url = dir.appendingPathComponent(path)
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try data.write(to: url)
+        }
+        if !contentTypeOverrides.isEmpty {
+            let typesURL = dir.appendingPathComponent("[Content_Types].xml")
+            var types = try String(contentsOf: typesURL, encoding: .utf8)
+            let overrides = contentTypeOverrides.map { #"<Override PartName="\#($0.key)" ContentType="\#($0.value)"/>"# }.joined()
+            types = types.replacingOccurrences(of: "</Types>", with: overrides + "</Types>")
+            try types.write(to: typesURL, atomically: true, encoding: .utf8)
         }
         let out = FileManager.default.temporaryDirectory
             .appendingPathComponent("pptx-media-\(UUID().uuidString).pptx")

@@ -1,4 +1,6 @@
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 import OOXMLSwift
 @testable import PPTXSwift
 
@@ -74,6 +76,7 @@ struct PackageInspector {
     }
 
     func relsPartName(of partName: String) -> String {
+        guard !partName.isEmpty else { return "_rels/.rels" }
         let dir = (partName as NSString).deletingLastPathComponent
         let file = (partName as NSString).lastPathComponent
         return dir.isEmpty ? "_rels/\(file).rels" : "\(dir)/_rels/\(file).rels"
@@ -118,14 +121,19 @@ struct PackageInspector {
         return PptxReader.resolvePartPath(target: relationship.target, relativeTo: sourcePart)
     }
 
-    /// Everything that would make PowerPoint repair the package or show a
-    /// missing picture, as human-readable findings (empty = consistent):
+    /// Package-level consistency findings, human-readable (empty = none
+    /// found). This is a structural check of the properties below, not a
+    /// full schema validation or a PowerPoint render:
     ///
     /// 1. a part without a content type;
-    /// 2. a relationship file with duplicate Ids;
+    /// 2. a relationship file (including the package's `_rels/.rels`) with
+    ///    duplicate Ids;
     /// 3. an internal relationship whose target part does not exist;
     /// 4. an `r:` reference in a slide with no relationship of that Id;
-    /// 5. a picture `r:embed` whose relationship is not an image relationship.
+    /// 5. a picture `r:embed` whose relationship is not an image relationship;
+    /// 6. a media part ImageIO identifies whose content type is not that
+    ///    format's MIME type;
+    /// 7. an `a:srcRect` edge that is not an integer in the `xsd:int` range.
     func integrityViolations() throws -> [String] {
         var findings: [String] = []
         let parts = try partNames()
@@ -133,7 +141,8 @@ struct PackageInspector {
         for part in parts where part != "[Content_Types].xml" {
             if try contentType(of: part) == nil { findings.append("no content type: \(part)") }
         }
-        for part in parts where !part.hasSuffix(".rels") && part != "[Content_Types].xml" {
+        // "" stands for the package itself, whose relationships are _rels/.rels.
+        for part in [""] + parts where !part.hasSuffix(".rels") && part != "[Content_Types].xml" {
             let rels = try relationships(of: part)
             let ids = rels.map(\.id)
             if Set(ids).count != ids.count { findings.append("duplicate relationship Ids in \(relsPartName(of: part))") }
@@ -144,7 +153,21 @@ struct PackageInspector {
                 }
             }
         }
+        for part in parts where part.hasPrefix("ppt/media/") {
+            let data = try Data(contentsOf: root.appendingPathComponent(part))
+            guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+                  let identifier = CGImageSourceGetType(source) as String?,
+                  let mime = UTType(identifier)?.preferredMIMEType else { continue }
+            let declared = try contentType(of: part)
+            if declared != mime { findings.append("\(part) holds \(mime) but is typed \(declared ?? "nothing")") }
+        }
         for part in parts where part.hasPrefix("ppt/slides/") && part.hasSuffix(".xml") && !part.contains("/_rels/") {
+            for node in try xml(part).nodes(forXPath: "//*[local-name()='srcRect']") {
+                for attribute in (node as? XMLElement)?.attributes ?? [] {
+                    let value = attribute.stringValue ?? ""
+                    if Int32(value) == nil { findings.append("\(part) srcRect \(attribute.name ?? "")=\"\(value)\" is not an xsd:int") }
+                }
+            }
             let rels = try relationships(of: part)
             let byId = Dictionary(rels.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             for reference in try relationshipReferences(in: part) where byId[reference] == nil {

@@ -90,10 +90,18 @@ struct PictureRelationshipWriteTests {
 
     @Test func `Media parts of any type are registered in the content types`() throws {
         let png = try Self.pngData()
-        let names = ["a.gif", "b.BMP", "c.tiff", "d.svg", "noextension", "e.xyz"]
+        let svg = Data(#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="3"/>"#.utf8)
+        let files: [(name: String, data: Data)] = [
+            ("a.gif", try GeneratedImage.encoded(.gif)),
+            ("b.BMP", try GeneratedImage.encoded(.bmp)),
+            ("c.tiff", try GeneratedImage.encoded(.tiff)),
+            ("d.svg", svg),
+            ("noextension", png),
+            ("e.xyz", png),
+        ]
         let pres = Self.presentation(
-            pictures: [names.enumerated().map { Self.picture($0.offset + 2, media: $0.element) }],
-            images: names.map { MediaFile(id: $0, fileName: $0, data: png) }
+            pictures: [files.enumerated().map { Self.picture($0.offset + 2, media: $0.element.name) }],
+            images: files.map { MediaFile(id: $0.name, fileName: $0.name, data: $0.data) }
         )
         try TemporaryPPTX.written(pres) { url in
             let package = try PackageInspector(url)
@@ -107,6 +115,56 @@ struct PictureRelationshipWriteTests {
             #expect(try package.contentType(of: "ppt/media/noextension") == "image/png",
                     "an extension-less part is typed by sniffing its bytes")
             #expect(try package.contentType(of: "ppt/media/e.xyz") == "image/png")
+        }
+    }
+
+    @Test func `A part's content type follows its bytes when they disagree with its extension`() throws {
+        // Review round 1, HIGH 1: OPC types a part by [Content_Types].xml, not
+        // by its extension, so a PNG may legitimately be named photo.svg.
+        let png = try Self.pngData()
+        let jpeg = try GeneratedImage.jpeg(width: 8, height: 6, orientation: 1)
+        let files: [(name: String, data: Data, type: String)] = [
+            ("photo.svg", png, "image/png"),
+            ("shot.png", jpeg, "image/jpeg"),
+            ("plain.png", png, "image/png"),
+        ]
+        let pres = Self.presentation(
+            pictures: [files.enumerated().map { Self.picture($0.offset + 2, media: $0.element.name) }],
+            images: files.map { MediaFile(id: $0.name, fileName: $0.name, data: $0.data) }
+        )
+        try TemporaryPPTX.written(pres) { url in
+            let package = try PackageInspector(url)
+            defer { package.cleanup() }
+            let violations = try package.integrityViolations()
+            #expect(violations == [])
+            for file in files {
+                #expect(try package.contentType(of: "ppt/media/\(file.name)") == file.type, "\(file.name)")
+                #expect(try Data(contentsOf: package.root.appendingPathComponent("ppt/media/\(file.name)")) == file.data)
+            }
+        }
+    }
+
+    @Test func `A declared content type survives a round trip when the bytes cannot be identified`() throws {
+        // An EMF-like part stored under a .png name, typed by an Override the
+        // source package declared: ImageIO cannot identify it, and the
+        // extension would say image/png, so only the declared type is right.
+        var emf: [UInt8] = [0x01, 0x00, 0x00, 0x00, 0x6C, 0x00, 0x00, 0x00]
+        emf += [UInt8](repeating: 0, count: 32) + Array(" EMF".utf8) + [UInt8](repeating: 0, count: 64)
+        let url = try PictureMediaTests.tamperedCropped(
+            relationship: PictureMediaTests.imageRel(target: "../media/image1.png"),
+            extraFiles: ["ppt/media/image1.png": Data(emf)],
+            contentTypeOverrides: ["/ppt/media/image1.png": "image/x-emf"]
+        )
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let pres = try PptxReader.read(from: url)
+        let media = try #require(pres.images.first { $0.fileName == "image1.png" })
+        #expect(media.packageContentType == "image/x-emf")
+
+        try TemporaryPPTX.written(pres) { written in
+            let package = try PackageInspector(written)
+            defer { package.cleanup() }
+            #expect(try package.contentType(of: "ppt/media/image1.png") == "image/x-emf")
         }
     }
 
@@ -175,6 +233,30 @@ struct PictureRelationshipWriteTests {
         }
         #expect(message.contains("missing.png"))
         #expect(!FileManager.default.fileExists(atPath: url.path))
+    }
+
+    @Test func `A failed save leaves an existing destination file untouched`() throws {
+        let url = TemporaryPPTX.url("sentinel")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let sentinel = Data("existing deck".utf8)
+        try sentinel.write(to: url)
+
+        let failing: [(label: String, presentation: Presentation)] = [
+            ("missing media", Self.presentation(pictures: [[Self.picture(2, media: "missing.png")]], images: [])),
+            ("unrepresentable crop", {
+                var pres = PptxWriter.createNew()
+                pres.slides[0].elements = [.picture(Picture(
+                    id: 2, sourceRect: PictureSourceRect(left: Int(Int32.max) + 1)
+                ))]
+                return pres
+            }()),
+        ]
+        for c in failing {
+            #expect(throws: PPTXError.self, "\(c.label)") {
+                try PptxWriter.write(c.presentation, to: url)
+            }
+            #expect(try Data(contentsOf: url) == sentinel, "\(c.label) overwrote the destination")
+        }
     }
 
     @Test func `A picture without media is written with no r:embed rather than a dangling one`() throws {

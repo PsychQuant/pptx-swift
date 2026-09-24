@@ -61,6 +61,15 @@ public struct PictureSourceRect: Equatable {
         self.bottom = bottom
     }
 
+    /// Whether every edge fits `xsd:int` (the transitional `ST_Percentage`
+    /// the writer emits). `PptxWriter` refuses to write, and
+    /// `NativeAspect` refuses to fit, a crop that does not: the reader could
+    /// not read it back.
+    public var isRepresentable: Bool {
+        let range = Int(Int32.min)...Int(Int32.max)
+        return [left, top, right, bottom].allSatisfy(range.contains)
+    }
+
     /// Fraction of the image's width left visible (> 1 when extended).
     public var visibleWidthFraction: Double {
         1 - (Double(left) + Double(right)) / Double(Self.fullScale)

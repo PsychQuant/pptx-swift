@@ -23,6 +23,10 @@ import UniformTypeIdentifiers
 /// Only the first `MediaFile` for a given `fileName` is written, matching
 /// `Presentation.mediaFile(for:)`, which resolves a picture to the first
 /// entry with that name.
+///
+/// Every part gets a content type (see `contentType(of:partName:)`): a
+/// `Default` entry when it is the one the extension table gives, else a
+/// per-part `Override`.
 struct MediaPartPlan {
     struct Part {
         /// File name under `ppt/media/`.
@@ -68,13 +72,10 @@ struct MediaPartPlan {
         parts = zip(unique, kept).map { image, name in
             let name = name!
             map[image.fileName] = name
-            let ext = Self.extensionOf(name)
-            if let known = MediaFile.contentTypesByExtension[ext] {
-                return Part(name: name, data: image.data, contentType: known, typedByExtension: true)
-            }
-            return Part(name: name, data: image.data,
-                        contentType: Self.sniffedContentType(of: image.data) ?? "application/octet-stream",
-                        typedByExtension: false)
+            let contentType = Self.contentType(of: image, partName: name)
+            let byExtension = MediaFile.contentTypesByExtension[Self.extensionOf(name)]
+            return Part(name: name, data: image.data, contentType: contentType,
+                        typedByExtension: contentType == byExtension)
         }
         partNameByFileName = map
     }
@@ -145,6 +146,21 @@ struct MediaPartPlan {
               let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
               let identifier = CGImageSourceGetType(source) as String? else { return nil }
         return UTType(identifier)
+    }
+
+    /// A part's content type, first match wins:
+    ///
+    /// 1. what ImageIO identifies the bytes as — OPC types a part by
+    ///    `[Content_Types].xml`, not by its name, so a PNG may be named
+    ///    `photo.svg` and must still be typed `image/png`;
+    /// 2. the type the source package declared (`MediaFile.packageContentType`)
+    ///    — for formats ImageIO cannot identify (EMF, WMF, SVG, …);
+    /// 3. the extension table (`MediaFile.contentTypesByExtension`);
+    /// 4. `application/octet-stream`.
+    static func contentType(of image: MediaFile, partName: String) -> String {
+        if let sniffed = sniffedContentType(of: image.data) { return sniffed }
+        if let declared = image.packageContentType, !declared.isEmpty { return declared }
+        return MediaFile.contentTypesByExtension[extensionOf(partName)] ?? "application/octet-stream"
     }
 
     /// MIME type ImageIO recognises the bytes as, if any.

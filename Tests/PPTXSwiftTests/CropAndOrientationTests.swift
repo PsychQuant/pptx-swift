@@ -26,6 +26,28 @@ struct CropAndOrientationTests {
         }
     }
 
+    static let orientationValues: [(label: String, value: Any?, swaps: Bool)] = [
+        ("absent", nil, false),
+        ("0 (not a valid EXIF value)", NSNumber(value: 0), false),
+        ("9 (not a valid EXIF value)", NSNumber(value: 9), false),
+        ("-6", NSNumber(value: -6), false),
+        ("a string", "6", false),
+        ("5", NSNumber(value: 5), true),
+        ("8", NSNumber(value: 8), true),
+    ]
+
+    @Test(arguments: orientationValues.indices)
+    func `Only EXIF orientations 5 to 8 swap axes; absent or unrecognised values keep them`(index: Int) {
+        let c = Self.orientationValues[index]
+        #expect(NativeAspect.swapsAxes(orientation: c.value) == c.swaps, "\(c.label)")
+    }
+
+    @Test func `An image without an orientation tag keeps its stored axes`() throws {
+        let png = try GeneratedImage.png(width: 1600, height: 1200)
+        let dims = try NativeAspect.pixelDimensions(of: png)
+        #expect(dims.width == 1600 && dims.height == 1200)
+    }
+
     @Test func `An upright portrait photo fits as portrait`() throws {
         // Stored landscape, shown portrait: a 10 cm wide fit must be taller than wide.
         let jpeg = try GeneratedImage.jpeg(width: 1600, height: 1200, orientation: 6)
@@ -142,6 +164,70 @@ struct CropAndOrientationTests {
         #expect(name == "srcRect")
     }
 
+    static let unrepresentableCrops: [PictureSourceRect] = [
+        // The visible fraction is 0.5, but the edges do not fit xsd:int.
+        PictureSourceRect(left: 3_000_000_000, right: -2_999_950_000),
+        PictureSourceRect(top: Int(Int32.max) + 1),
+        PictureSourceRect(bottom: Int(Int32.min) - 1),
+        PictureSourceRect(left: .max),
+        PictureSourceRect(right: .min),
+    ]
+
+    @Test(arguments: unrepresentableCrops)
+    func `Crop edges outside the 32-bit range are rejected by fitting and by the writer`(crop: PictureSourceRect) {
+        #expect(!crop.isRepresentable)
+        let fitError = #expect(throws: PPTXError.self) {
+            _ = try NativeAspect.fittedSize(keeping: .width, of: Size(width: 3_600_000, height: 1),
+                                            pixelWidth: 1600, pixelHeight: 1200, crop: crop)
+        }
+        if case .invalidParameter(let name, _)? = fitError {
+            #expect(name == "srcRect")
+        } else {
+            Issue.record("expected .invalidParameter, got \(String(describing: fitError))")
+        }
+
+        var pres = PptxWriter.createNew()
+        pres.slides[0].elements = [.picture(Picture(id: 2, sourceRect: crop))]
+        let url = TemporaryPPTX.url("badcrop")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let writeError = #expect(throws: PPTXError.self) {
+            try PptxWriter.write(pres, to: url)
+        }
+        if case .writeError(let message)? = writeError {
+            #expect(message.contains("srcRect"))
+        } else {
+            Issue.record("expected .writeError, got \(String(describing: writeError))")
+        }
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+    }
+
+    @Test func `Crop edges at the 32-bit limits are written and read back exactly`() throws {
+        let crop = PictureSourceRect(left: Int(Int32.max), top: Int(Int32.min), right: -1, bottom: 1)
+        #expect(crop.isRepresentable)
+        var pres = PptxWriter.createNew()
+        pres.slides[0].elements = [.picture(Picture(id: 2, sourceRect: crop))]
+        try TemporaryPPTX.written(pres) { url in
+            let reread = try PptxReader.read(from: url)
+            #expect(reread.slides[0].pictures.first?.sourceRect == crop)
+        }
+    }
+
+    static let invalidPixelSizes: [(width: Int, height: Int)] = [(0, 100), (100, 0), (-1, 100), (100, -5)]
+
+    @Test(arguments: invalidPixelSizes)
+    func `Visible dimensions reject non-positive pixel sizes with or without a crop`(size: (width: Int, height: Int)) {
+        for crop in [nil, PictureSourceRect(), PictureSourceRect(left: 10_000)] as [PictureSourceRect?] {
+            let error = #expect(throws: PPTXError.self) {
+                _ = try NativeAspect.visibleDimensions(pixelWidth: size.width, pixelHeight: size.height, crop: crop)
+            }
+            if case .invalidParameter(let name, _)? = error {
+                #expect(name == "pixelDimensions")
+            } else {
+                Issue.record("expected .invalidParameter, got \(String(describing: error))")
+            }
+        }
+    }
+
     @Test func `Orientation is applied before the crop`() throws {
         // Stored 1600 × 1200, shown 1200 × 1600; 25 % off left and right of
         // the upright image leaves 600 × 1600.
@@ -216,6 +302,23 @@ struct CropAndOrientationTests {
 }
 
 extension GeneratedImage {
+    /// A small solid image encoded as `type` (GIF, BMP, TIFF, …).
+    static func encoded(_ type: UTType, width: Int = 8, height: Int = 6) throws -> Data {
+        guard let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ) else { throw GenerationFailed() }
+        context.setFillColor(red: 0.1, green: 0.6, blue: 0.3, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        guard let image = context.makeImage() else { throw GenerationFailed() }
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(output, type.identifier as CFString, 1, nil)
+        else { throw GenerationFailed() }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else { throw GenerationFailed() }
+        return output as Data
+    }
+
     /// A JPEG whose stored pixel grid is `width` × `height`, tagged with the
     /// given EXIF orientation (1–8).
     static func jpeg(width: Int, height: Int, orientation: Int) throws -> Data {

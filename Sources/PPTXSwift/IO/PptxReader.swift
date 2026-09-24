@@ -109,8 +109,8 @@ public struct PptxReader {
             presentation.slides.append(slide)
         }
 
-        // 5. 提取圖片資源
-        presentation.images = try extractImages(from: tempDir)
+        // 5. 提取圖片資源（連同來源套件為各 part 宣告的 content type）
+        presentation.images = try extractImages(from: tempDir, contentTypes: try parseContentTypes(in: tempDir))
 
         // 6. 解析 slide masters
         let masterRels = presRels.filter { $0.isSlideMaster }
@@ -811,7 +811,43 @@ public struct PptxReader {
 
     // MARK: - Images
 
-    private static func extractImages(from tempDir: URL) throws -> [MediaFile] {
+    /// `[Content_Types].xml`: `Override` entries keyed by lowercased,
+    /// percent-decoded part name (`/ppt/media/image1.png`) and `Default`
+    /// entries keyed by lowercased extension. Empty when the part is missing
+    /// or unreadable — the declared types are only a hint for the writer.
+    struct ContentTypes {
+        var overrides: [String: String] = [:]
+        var defaults: [String: String] = [:]
+
+        func contentType(ofPart partName: String) -> String? {
+            if let type = overrides[partName.lowercased()] { return type }
+            let last = (partName as NSString).lastPathComponent
+            guard let dot = last.lastIndex(of: ".") else { return nil }
+            return defaults[String(last[last.index(after: dot)...]).lowercased()]
+        }
+    }
+
+    static func parseContentTypes(in tempDir: URL) throws -> ContentTypes {
+        var types = ContentTypes()
+        let url = tempDir.appendingPathComponent("[Content_Types].xml")
+        guard FileManager.default.fileExists(atPath: url.path),
+              let xml = try? XMLDocument(data: Data(contentsOf: url)) else { return types }
+        for node in (try? xml.nodes(forXPath: "//*[local-name()='Override']")) ?? [] {
+            guard let element = node as? XMLElement,
+                  let name = element.attribute(forName: "PartName")?.stringValue,
+                  let type = element.attribute(forName: "ContentType")?.stringValue else { continue }
+            types.overrides[(name.removingPercentEncoding ?? name).lowercased()] = type
+        }
+        for node in (try? xml.nodes(forXPath: "//*[local-name()='Default']")) ?? [] {
+            guard let element = node as? XMLElement,
+                  let ext = element.attribute(forName: "Extension")?.stringValue,
+                  let type = element.attribute(forName: "ContentType")?.stringValue else { continue }
+            types.defaults[ext.lowercased()] = type
+        }
+        return types
+    }
+
+    private static func extractImages(from tempDir: URL, contentTypes: ContentTypes) throws -> [MediaFile] {
         // 與 resolvedMediaFileName 共用同一個檢查：只收真正位於 ppt/media/ 的一般檔案
         // （lstat 判定，不跟隨 symlink；子目錄、FIFO 等一律略過且不開啟）
         guard let realMedia = realMediaDirectory(packageRoot: tempDir) else { return [] }
@@ -824,7 +860,8 @@ public struct PptxReader {
             return MediaFile(
                 id: fileURL.lastPathComponent,
                 fileName: fileURL.lastPathComponent,
-                data: data
+                data: data,
+                packageContentType: contentTypes.contentType(ofPart: "/ppt/media/\(fileURL.lastPathComponent)")
             )
         }
     }

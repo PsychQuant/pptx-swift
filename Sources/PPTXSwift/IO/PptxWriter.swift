@@ -344,7 +344,7 @@ public struct PptxWriter {
         case .shape(let shape):
             return serializeShape(shape, nextId: &nextId)
         case .picture(let picture):
-            return serializePicture(picture, embedId: try imageRels.embedId(for: picture), nextId: &nextId)
+            return try serializePicture(picture, embedId: try imageRels.embedId(for: picture), nextId: &nextId)
         case .graphicFrame(let frame):
             return serializeGraphicFrame(frame, nextId: &nextId)
         case .group:
@@ -404,12 +404,12 @@ public struct PptxWriter {
     /// `embedId` is the relationship Id this slide's rels give the picture's
     /// media part; nil writes `<a:blip/>` with no `r:embed` (a picture with no
     /// media), never a reference to a relationship that does not exist.
-    private static func serializePicture(_ picture: Picture, embedId: String?, nextId: inout Int) -> String {
+    private static func serializePicture(_ picture: Picture, embedId: String?, nextId: inout Int) throws -> String {
         let id = picture.id > 0 ? picture.id : nextId
         nextId = max(nextId, id + 1)
         let blipXML = embedId.map { "<a:blip r:embed=\"\($0)\"/>" } ?? "<a:blip/>"
         // CT_BlipFillProperties order: blip, srcRect, then the fill mode (#2)
-        let srcRectXML = picture.sourceRect.map(serializeSourceRect) ?? ""
+        let srcRectXML = try picture.sourceRect.map { try serializeSourceRect($0, pictureId: id) } ?? ""
 
         return """
               <p:pic>
@@ -435,7 +435,15 @@ public struct PptxWriter {
     }
 
     /// `<a:srcRect>` with only the non-zero edges (0 is the schema default).
-    private static func serializeSourceRect(_ rect: PictureSourceRect) -> String {
+    ///
+    /// - Throws: `PPTXError.writeError` when an edge does not fit `xsd:int`:
+    ///   written as is it would be invalid, and read back as 0.
+    private static func serializeSourceRect(_ rect: PictureSourceRect, pictureId: Int) throws -> String {
+        guard rect.isRepresentable else {
+            throw PPTXError.writeError(
+                "圖片 id=\(pictureId) 的 srcRect 超出 32 位元整數範圍（l=\(rect.left) t=\(rect.top) r=\(rect.right) b=\(rect.bottom)），無法寫出"
+            )
+        }
         let edges = [("l", rect.left), ("t", rect.top), ("r", rect.right), ("b", rect.bottom)]
         let attributes = edges.filter { $0.1 != 0 }.map { " \($0.0)=\"\($0.1)\"" }.joined()
         return "<a:srcRect\(attributes)/>"
