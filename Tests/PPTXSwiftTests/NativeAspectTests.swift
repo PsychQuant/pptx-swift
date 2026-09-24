@@ -27,6 +27,41 @@ struct NativeAspectTests {
         #expect(dims.height == 500)
     }
 
+    // MARK: - Header-only read (review MEDIUM 4)
+
+    /// Overwrites every IDAT payload byte of a PNG with 0x5A, leaving the
+    /// signature, IHDR and chunk lengths intact: the header is valid, the
+    /// compressed pixel stream is not a zlib stream at all.
+    static func corruptingPixelData(of png: Data) throws -> Data {
+        var bytes = [UInt8](png)
+        var offset = 8                                   // after the PNG signature
+        var corrupted = 0
+        while offset + 8 <= bytes.count {
+            let length = Int(bytes[offset]) << 24 | Int(bytes[offset + 1]) << 16
+                | Int(bytes[offset + 2]) << 8 | Int(bytes[offset + 3])
+            let type = String(decoding: bytes[(offset + 4)..<(offset + 8)], as: UTF8.self)
+            let dataStart = offset + 8
+            if type == "IDAT" {
+                for i in dataStart..<(dataStart + length) { bytes[i] = 0x5A }
+                corrupted += length
+            }
+            offset = dataStart + length + 4               // data + CRC
+        }
+        try #require(corrupted > 0, "PNG has no IDAT chunk to corrupt")
+        return Data(bytes)
+    }
+
+    @Test func `Dimensions come from the header even when the pixel data is garbage`() throws {
+        let png = try GeneratedImage.png(width: 1600, height: 1200)
+        let corrupted = try Self.corruptingPixelData(of: png)
+        #expect(corrupted.count == png.count)
+        #expect(corrupted != png)
+
+        let dims = try NativeAspect.pixelDimensions(of: corrupted)
+        #expect(dims.width == 1600)
+        #expect(dims.height == 1200)
+    }
+
     // MARK: - Scenario: Undecodable media is a typed error
 
     static let undecodableSamples: [(label: String, data: Data)] = {
