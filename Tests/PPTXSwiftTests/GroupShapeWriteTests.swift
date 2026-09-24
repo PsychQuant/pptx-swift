@@ -21,7 +21,7 @@ struct GroupShapeWriteTests {
     /// after a round trip, so a count-based assertion on them could not
     /// catch it disappearing.
     struct FlatElement: Equatable {
-        enum Kind: Equatable { case shape, picture, graphicFrame, group }
+        enum Kind: Equatable { case shape, picture, graphicFrame, group, connector, raw }
         let kind: Kind
         let id: Int
         let name: String
@@ -40,6 +40,10 @@ struct GroupShapeWriteTests {
             case .group(let g):
                 return [FlatElement(kind: .group, id: g.id, name: g.name, depth: depth)]
                     + flatten(g.elements, depth: depth + 1)
+            case .connector(let c):
+                return [FlatElement(kind: .connector, id: c.id, name: c.name, depth: depth)]
+            case .raw(let r):
+                return [FlatElement(kind: .raw, id: r.elementIds.first ?? 0, name: r.localName, depth: depth)]
             }
         }
     }
