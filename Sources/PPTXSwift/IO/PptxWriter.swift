@@ -57,13 +57,14 @@ public struct PptxWriter {
     /// 拒絕寫出無法保留其內容的投影片，而不是默默遺失。
     ///
     /// - Throws: `PPTXError.writeError` when a slide has embedded or linked
-    ///   audio／video (`a:audioFile`／`a:videoFile`, usually paired with a
-    ///   `p:timing` play trigger): the model does not carry that structure,
-    ///   so writing would silently drop playback (PsychQuant/pptx-swift#5).
+    ///   media (any DrawingML `EG_Media` element, usually paired with a
+    ///   `p:timing` play trigger) or a transition sound (`p:snd`): the model
+    ///   does not carry that structure, so writing would silently drop
+    ///   playback (PsychQuant/pptx-swift#5).
     private static func validateSupportedContent(_ presentation: Presentation) throws {
         for (index, slide) in presentation.slides.enumerated() where slide.containsUnsupportedMedia {
             throw PPTXError.writeError(
-                "投影片 \(index + 1) 含音訊或影片（a:audioFile／a:videoFile）：pptx-swift 尚未建模播放觸發與時間軸（p:timing），寫出會遺失播放能力，拒絕存檔"
+                "投影片 \(index + 1) 含音訊、影片或換場音效：pptx-swift 尚未建模播放觸發、時間軸（p:timing）與換場音效，寫出會遺失播放能力，拒絕存檔"
             )
         }
     }
