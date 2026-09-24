@@ -24,6 +24,14 @@ public struct Connector {
     public var startConnection: ConnectionSite?
     /// 終點連接目標（`p:cNvCxnSpPr/a:endCxn`）。
     public var endConnection: ConnectionSite?
+    /// 預設幾何的調整值（`a:prstGeom/a:avLst/a:gd`，ECMA-376 `CT_GeomGuideList`／
+    /// `CT_GeomGuide`）。彎折／曲線連接線（`bentConnectorN`／`curvedConnectorN`）
+    /// 的實際轉折點常常偏離預設路徑，靠這些調整值記錄；空陣列時省略
+    /// `<a:avLst>` 內容（寫出空的 `<a:avLst/>`，維持沒有調整值時輸出與 #9
+    /// 之前逐位元組相同）。Codex round 1 review 指出先前版本永遠寫空
+    /// `<a:avLst/>`，會靜默丟棄讀進來的調整值——即使邊界框、旋轉、連接點都
+    /// 沒變，連接線實際繞行的路徑仍可能因此跑掉。
+    public var adjustments: [GeometryAdjustment]
 
     public init(
         id: Int = 0,
@@ -36,7 +44,8 @@ public struct Connector {
         flipVertical: Bool = false,
         outline: ShapeOutline? = nil,
         startConnection: ConnectionSite? = nil,
-        endConnection: ConnectionSite? = nil
+        endConnection: ConnectionSite? = nil,
+        adjustments: [GeometryAdjustment] = []
     ) {
         self.id = id
         self.name = name
@@ -49,6 +58,20 @@ public struct Connector {
         self.outline = outline
         self.startConnection = startConnection
         self.endConnection = endConnection
+        self.adjustments = adjustments
+    }
+}
+
+/// 一個預設幾何形狀的調整值（`a:gd`，ECMA-376 `CT_GeomGuide`）：`name` 是調整
+/// 控點的代號（由形狀類型定義，例如 `adj1`／`adj2`），`formula` 是控制其位置的
+/// 公式字串（例如 `"val 50000"`）。pptx-swift 不解析公式語意，只原樣往返。
+public struct GeometryAdjustment: Equatable {
+    public var name: String
+    public var formula: String
+
+    public init(name: String, formula: String) {
+        self.name = name
+        self.formula = formula
     }
 }
 

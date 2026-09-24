@@ -573,6 +573,12 @@ public struct PptxWriter {
         let xfrmAttrs = xfrmTransformAttributes(
             rotation: connector.rotation, flipHorizontal: connector.flipHorizontal, flipVertical: connector.flipVertical)
         let lnXML = connector.outline.map(serializeConnectorLine) ?? ""
+        // 沒有調整值時寫空 <a:avLst/>，跟 #9 之前逐位元組相同；有的話原樣
+        // 寫回每一個 <a:gd>（Codex round 1 review：先前永遠寫空，會靜默丟棄
+        // 讀進來的調整值）。
+        let avLstXML = connector.adjustments.isEmpty
+            ? "<a:avLst/>"
+            : "<a:avLst>" + connector.adjustments.map { "<a:gd name=\"\(escapeXML($0.name))\" fmla=\"\(escapeXML($0.formula))\"/>" }.joined() + "</a:avLst>"
 
         return """
               <p:cxnSp>
@@ -586,7 +592,7 @@ public struct PptxWriter {
                     <a:off x="\(connector.position.x)" y="\(connector.position.y)"/>
                     <a:ext cx="\(connector.size.width)" cy="\(connector.size.height)"/>
                   </a:xfrm>
-                  <a:prstGeom prst="\(connector.geometry.rawValue)"><a:avLst/></a:prstGeom>
+                  <a:prstGeom prst="\(connector.geometry.rawValue)">\(avLstXML)</a:prstGeom>
                   \(lnXML)
                 </p:spPr>
               </p:cxnSp>

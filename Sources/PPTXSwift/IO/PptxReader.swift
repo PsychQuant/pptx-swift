@@ -808,6 +808,17 @@ public struct PptxReader {
             parseShapeProperties(spPr, position: &connector.position, size: &connector.size,
                                rotation: &connector.rotation, flipHorizontal: &connector.flipHorizontal, flipVertical: &connector.flipVertical,
                                fill: &fill, outline: &connector.outline, geometry: &connector.geometry)
+            // 預設幾何的調整值（a:prstGeom/a:avLst/a:gd），彎折／曲線連接線
+            // 的實際轉折點常偏離預設路徑，靠這些調整值記錄（Codex round 1
+            // review：先前完全不讀，寫出時永遠變回預設路徑）。
+            if let avLst = try spPr.nodes(forXPath: "*[local-name()='prstGeom']/*[local-name()='avLst']").first as? XMLElement {
+                for gd in try avLst.nodes(forXPath: "*[local-name()='gd']") {
+                    guard let gdElement = gd as? XMLElement,
+                          let name = gdElement.attribute(forName: "name")?.stringValue,
+                          let formula = gdElement.attribute(forName: "fmla")?.stringValue else { continue }
+                    connector.adjustments.append(GeometryAdjustment(name: name, formula: formula))
+                }
+            }
         }
 
         return connector
@@ -842,15 +853,28 @@ public struct PptxReader {
         )
     }
 
-    /// `element.xmlString`, but with every namespace prefix used anywhere in
-    /// the subtree re-declared as an `xmlns:` attribute on the fragment's own
-    /// root — `XMLElement.xmlString` on a node detached from its parsed
-    /// document does not re-declare a namespace the node only inherited from
-    /// an ancestor (verified empirically against Foundation's actual
-    /// behavior, not documented), so `<mc:AlternateContent>` copied out of a
-    /// `<p:spTree xmlns:mc="...">` would otherwise silently lose the binding
-    /// that makes its own `mc:` tag names resolvable once it is spliced into
-    /// a different XML document (PsychQuant/pptx-swift#9).
+    /// `element.xmlString`, but with every namespace binding inherited from
+    /// an ancestor (not locally re-declared on `element` itself) re-declared
+    /// as an `xmlns:`／`xmlns` attribute on the fragment's own root —
+    /// `XMLElement.xmlString` on a node detached from its parsed document
+    /// does not re-declare a namespace the node only inherited (verified
+    /// empirically against Foundation's actual behavior, not documented), so
+    /// `<mc:AlternateContent>` copied out of a `<p:spTree xmlns:mc="...">`
+    /// would otherwise silently lose the binding that makes its own `mc:`
+    /// tag names resolvable once it is spliced into a different XML document
+    /// (PsychQuant/pptx-swift#9).
+    ///
+    /// Declares **every** inherited binding unconditionally, rather than
+    /// first scanning the serialized text for which prefixes look "used":
+    /// a round 1 Codex review caught two real gaps in that scan-first
+    /// design — it cannot see a prefix that appears only inside an
+    /// `mc:Choice`／`mc:AlternateContent`'s `Requires` (or `mc:Ignorable`)
+    /// attribute *value* (a space-separated list of prefixes, not an
+    /// element／attribute name the scan would match), and it silently
+    /// dropped the unprefixed default namespace entirely. Declaring
+    /// everything inherited — an extra, unused `xmlns:` binding is
+    /// harmless, valid XML — closes both without trying to enumerate every
+    /// place OOXML can spell a namespace dependency.
     static func selfContainedXMLString(for element: XMLElement) -> String {
         var raw = element.xmlString
 
@@ -859,6 +883,7 @@ public struct PptxReader {
         // this is the effective in-scope binding at `element`'s position,
         // reconstructed by hand because `XMLElement.resolveNamespace(forName:)`
         // does not reliably walk the ancestor chain (verified empirically).
+        // `""` is the dictionary key for the unprefixed default namespace.
         var chain: [XMLElement] = []
         var current: XMLNode? = element
         while let el = current as? XMLElement {
@@ -868,35 +893,49 @@ public struct PptxReader {
         var inScope: [String: String] = [:]
         for el in chain.reversed() {
             for ns in el.namespaces ?? [] {
-                guard let name = ns.name, let uri = ns.stringValue else { continue }
-                inScope[name] = uri
+                guard let uri = ns.stringValue else { continue }
+                inScope[ns.name ?? ""] = uri
             }
         }
+        guard !inScope.isEmpty else { return raw }
 
-        // Prefixes actually written into the serialized fragment — element
-        // and attribute qualified names only (`<prefix:name`, ` prefix:name=`),
-        // never inside an attribute *value*, which this pattern cannot match
-        // (it requires `<` or whitespace immediately before the prefix).
-        guard let regex = try? NSRegularExpression(pattern: #"[<\s]([A-Za-z][\w.\-]*):[A-Za-z]"#) else { return raw }
-        let fullRange = NSRange(raw.startIndex..<raw.endIndex, in: raw)
-        var usedPrefixes = Set<String>()
-        regex.enumerateMatches(in: raw, range: fullRange) { match, _, _ in
-            guard let match, let range = Range(match.range(at: 1), in: raw) else { return }
-            usedPrefixes.insert(String(raw[range]))
-        }
-
-        let missingDeclarations = usedPrefixes.sorted().compactMap { prefix -> String? in
-            guard prefix != "xmlns" else { return nil }  // regex artifact of matching " xmlns:foo="
-            guard let uri = inScope[prefix] else { return nil }
-            // 已經在片段自己的某個節點上局部宣告過（例如 mc:Choice 自己的
-            // Requires 擴充命名空間），不要疊加重複宣告。
-            guard !raw.contains("xmlns:\(prefix)=") else { return nil }
-            return "xmlns:\(prefix)=\"\(uri.replacingOccurrences(of: "\"", with: "&quot;"))\""
-        }
-        guard !missingDeclarations.isEmpty,
-              let tagNameRange = raw.range(of: #"^<[A-Za-z][\w:.\-]*"#, options: .regularExpression) else { return raw }
-        raw.insert(contentsOf: " " + missingDeclarations.joined(separator: " "), at: tagNameRange.upperBound)
+        // Only what `element` does not already declare locally on itself —
+        // checked against `element.namespaces` (this node's own local
+        // declarations), never against whether the *serialized text*
+        // contains a matching substring anywhere: a round 1 Codex review
+        // caught that a whole-fragment text search is fooled by a *different*
+        // scope re-declaring the same prefix to a different URI deeper in
+        // the subtree (valid, ordinary XML nesting) — that inner
+        // re-declaration would wrongly suppress the outer one this root
+        // actually needs.
+        let rootLocallyDeclared = Set((element.namespaces ?? []).map { $0.name ?? "" })
+        let declarations = inScope
+            .filter { !rootLocallyDeclared.contains($0.key) }
+            .sorted { $0.key < $1.key }
+            .map { prefix, uri -> String in
+                let escapedURI = escapeXMLAttributeValue(uri)
+                return prefix.isEmpty ? "xmlns=\"\(escapedURI)\"" : "xmlns:\(prefix)=\"\(escapedURI)\""
+            }
+        guard !declarations.isEmpty,
+              // OOXML element/attribute names are always simple ASCII
+              // identifiers in practice (the schemas define them that way);
+              // this does not accept the full XML Name production (Unicode
+              // letters, combining marks, …) for an adversarial root tag —
+              // an accepted, documented boundary, not a silent gap.
+              let tagNameRange = raw.range(of: #"^<[A-Za-z_][\w:.\-]*"#, options: .regularExpression) else { return raw }
+        raw.insert(contentsOf: " " + declarations.joined(separator: " "), at: tagNameRange.upperBound)
         return raw
+    }
+
+    /// Full XML attribute-value escaping (`&`, `<`, `"`) for a namespace URI
+    /// being written into a synthesized `xmlns:*="..."` attribute — a round 1
+    /// Codex review caught that escaping only `"` leaves a URI containing a
+    /// literal `&` (uncommon but valid, e.g. a query-string-bearing extension
+    /// namespace) producing malformed output once re-serialized.
+    private static func escapeXMLAttributeValue(_ text: String) -> String {
+        text.replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
     }
 
     // MARK: - Text Body

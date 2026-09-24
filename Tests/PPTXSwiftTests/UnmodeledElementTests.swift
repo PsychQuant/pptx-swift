@@ -69,6 +69,45 @@ struct UnmodeledElementTests {
         }
     }
 
+    // MARK: - Scenario: a connector's geometry adjustment values round-trip
+
+    /// Codex review round 1, MEDIUM: the writer always emitted an empty
+    /// `<a:avLst/>`, silently discarding any adjustment values a bent or
+    /// curved connector actually had — the bounding box, rotation and
+    /// connection sites would all round-trip correctly while the connector's
+    /// visible routing quietly reset to the preset default.
+    @Test func `A connector with non default geometry adjustments round trips them`() throws {
+        var pres = PptxWriter.createNew()
+        pres.slides[0].elements = [
+            .connector(Connector(
+                id: 2, name: "Adjusted elbow", geometry: .bentConnector3,
+                size: Size(width: 914400, height: 914400),
+                adjustments: [GeometryAdjustment(name: "adj1", formula: "val 25000"), GeometryAdjustment(name: "adj2", formula: "val 75000")]
+            )),
+        ]
+
+        try TemporaryPPTX.written(pres) { url in
+            let package = try PackageInspector(url)
+            defer { package.cleanup() }
+            #expect(try package.integrityViolations() == [])
+
+            let slideXML = try package.xml("ppt/slides/slide1.xml")
+            let avLst = try #require(try slideXML.nodes(forXPath: "//*[local-name()='cxnSp']//*[local-name()='avLst']").first as? XMLElement)
+            let gds = try avLst.nodes(forXPath: "*[local-name()='gd']")
+            #expect(gds.count == 2)
+
+            let reread = try PptxReader.read(from: url)
+            let connector = try #require(reread.slides[0].elements.compactMap { element -> Connector? in
+                if case .connector(let c) = element { return c }
+                return nil
+            }.first)
+            #expect(connector.adjustments == [
+                GeometryAdjustment(name: "adj1", formula: "val 25000"),
+                GeometryAdjustment(name: "adj2", formula: "val 75000"),
+            ])
+        }
+    }
+
     // MARK: - Scenario: real fixture — shapes.pptx's three connectors
 
     /// `shapes.pptx` (Apache POI, already used by `RealFileTests`) has three
@@ -168,13 +207,21 @@ struct UnmodeledElementTests {
 
     // MARK: - Scenario: synthetic mc:AlternateContent round-trips as raw XML
 
+    /// `mc:` is declared **only** on the outer `<p:sld>` (`extraNamespaceDecl`),
+    /// never locally inside the raw content itself — the raw fragment has no
+    /// `xmlns:mc="..."` of its own anywhere. This is deliberate: a version of
+    /// `selfContainedXMLString` that did nothing (`element.xmlString`
+    /// verbatim) would fail this test, because the fragment would be
+    /// genuinely unbound once spliced elsewhere. Before Codex review round 1,
+    /// the fixture declared `mc:` locally on the captured root, which meant
+    /// the test could not tell a working repair from a no-op.
     @Test func `A synthetic mc colon AlternateContent element round trips as self contained raw XML`() throws {
         var pres = PptxWriter.createNew()
         pres.slides[0].elements = [.shape(Shape(id: 2, name: "Ordinary shape"))]
 
         let raw = """
-        <mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">\
-        <mc:Choice xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" Requires="p14">\
+        <mc:AlternateContent>\
+        <mc:Choice Requires="p14">\
         <p:sp><p:nvSpPr><p:cNvPr id="50" name="Choice shape"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>\
         <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></a:xfrm>\
         <a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:sp>\
@@ -186,8 +233,10 @@ struct UnmodeledElementTests {
         </mc:Fallback>\
         </mc:AlternateContent>
         """
+        let outerNamespaces = "xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" "
+            + "xmlns:p14=\"http://schemas.microsoft.com/office/powerpoint/2010/main\""
 
-        let url = try Self.writtenWithRawContentSpliced(pres, rawXML: raw, label: "mc-alt-content")
+        let url = try Self.writtenWithRawContentSpliced(pres, rawXML: raw, extraNamespaceDecl: outerNamespaces, label: "mc-alt-content")
         defer { try? FileManager.default.removeItem(at: url) }
 
         let package = try PackageInspector(url)
@@ -203,7 +252,13 @@ struct UnmodeledElementTests {
         #expect(rawElement.localName == "AlternateContent")
         #expect(rawElement.elementIds.sorted() == [50, 51], "must see ids from both the Choice and Fallback branches")
         #expect(rawElement.referencesRelationship == false)
-        #expect(rawElement.xml.contains("xmlns:mc="), "self-contained fragment must re-declare mc: itself")
+        // `mc:` itself must be repaired (it is used as an element prefix, so
+        // even the old scan-based design would have caught it) — asserted on
+        // the parsed fragment's actual namespace URI, not a literal
+        // substring, so a repair that injects the wrong URI would still fail.
+        let fragmentRoot = try #require(try XMLDocument(xmlString: rawElement.xml).rootElement())
+        #expect(fragmentRoot.namespaces?.first { $0.name == "mc" }?.stringValue
+                == "http://schemas.openxmlformats.org/markup-compatibility/2006")
 
         // Round-trip again (read → write → read) to prove the self-contained
         // fragment really is well-formed once spliced into a *second*
@@ -219,6 +274,77 @@ struct UnmodeledElementTests {
             }.first)
             #expect(rawElement2.elementIds.sorted() == [50, 51])
         }
+    }
+
+    // MARK: - Scenario: a namespace dependency named only inside an mc:Choice Requires value
+
+    /// Codex review round 1, HIGH: `mc:Choice`'s `Requires` attribute holds a
+    /// space-separated list of namespace *prefixes* the consumer must
+    /// understand — a genuine namespace dependency that never appears as an
+    /// element／attribute *name* prefix anywhere in the content. A design
+    /// that only re-declares prefixes it finds by scanning for `prefix:name`
+    /// usages (the pre-review-round-1 version of
+    /// `selfContainedXMLString`) cannot see this dependency at all: nothing
+    /// in this fixture's content is `p14:`-prefixed. `p14` is declared only
+    /// on the outer `<p:sld>`, never locally in the raw content.
+    @Test func `A namespace named only in a Requires attribute value is still repaired`() throws {
+        var pres = PptxWriter.createNew()
+        pres.slides[0].elements = [.shape(Shape(id: 2, name: "s"))]
+
+        let raw = """
+        <mc:AlternateContent>\
+        <mc:Choice Requires="p14"><p:sp><p:nvSpPr><p:cNvPr id="50" name="x"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>\
+        <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="1" cy="1"/></a:xfrm>\
+        <a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr></p:sp></mc:Choice>\
+        <mc:Fallback/>\
+        </mc:AlternateContent>
+        """
+        let outerNamespaces = "xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" "
+            + "xmlns:p14=\"http://schemas.microsoft.com/office/powerpoint/2010/main\""
+
+        let url = try Self.writtenWithRawContentSpliced(pres, rawXML: raw, extraNamespaceDecl: outerNamespaces, label: "mc-requires-only")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let reread = try PptxReader.read(from: url)
+        let rawElement = try #require(reread.slides[0].elements.compactMap { element -> RawSlideElement? in
+            if case .raw(let r) = element { return r }
+            return nil
+        }.first)
+        try #require(!rawElement.xml.contains("p14:"), "fixture assumption: p14 never appears as an element/attribute prefix, only inside Requires=\"p14\"")
+        let fragmentRoot = try #require(try XMLDocument(xmlString: rawElement.xml).rootElement())
+        #expect(fragmentRoot.namespaces?.first { $0.name == "p14" }?.stringValue
+                == "http://schemas.microsoft.com/office/powerpoint/2010/main",
+                "p14 must be re-declared even though it never appears as a tag/attribute prefix")
+    }
+
+    // MARK: - Scenario: a prefix re-declared to a different URI deeper in the subtree
+
+    /// Codex review round 1, HIGH: a whole-fragment text search for
+    /// `xmlns:x="` (the pre-review-round-1 design's "already declared, skip
+    /// it" guard) is fooled by a *descendant* re-declaring the same prefix to
+    /// a *different* URI — ordinary, valid XML nesting. The captured root
+    /// itself does not locally declare `x`; only its child does, to a
+    /// different URI than the ancestor's. The root still needs the
+    /// ancestor's binding injected.
+    @Test func `A prefix redeclared deeper in the subtree does not suppress the roots own binding`() throws {
+        var pres = PptxWriter.createNew()
+        pres.slides[0].elements = [.shape(Shape(id: 2, name: "s"))]
+
+        let raw = "<x:widget><x:inner xmlns:x=\"urn:inner\"/></x:widget>"
+        let url = try Self.writtenWithRawContentSpliced(pres, rawXML: raw, extraNamespaceDecl: "xmlns:x=\"urn:outer\"", label: "nested-redecl")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let reread = try PptxReader.read(from: url)
+        let rawElement = try #require(reread.slides[0].elements.compactMap { element -> RawSlideElement? in
+            if case .raw(let r) = element { return r }
+            return nil
+        }.first)
+        let fragmentRoot = try #require(try XMLDocument(xmlString: rawElement.xml).rootElement())
+        #expect(fragmentRoot.namespaces?.first { $0.name == "x" }?.stringValue == "urn:outer",
+                "the captured root must get the ancestor's binding, not be suppressed by the descendant's different one")
+        let inner = try #require(fragmentRoot.children?.first as? XMLElement)
+        #expect(inner.namespaces?.first { $0.name == "x" }?.stringValue == "urn:inner",
+                "the descendant's own closer re-declaration must survive untouched")
     }
 
     // MARK: - Scenario: id collision avoidance sees ids inside raw content
@@ -293,9 +419,14 @@ struct UnmodeledElementTests {
 
         let outURL = TemporaryPPTX.url("content-part-write-refused")
         defer { try? FileManager.default.removeItem(at: outURL) }
-        #expect(throws: PPTXError.self) {
+        let error = #expect(throws: PPTXError.self) {
             try PptxWriter.write(reread, to: outURL)
         }
+        guard case .writeError(let message)? = error else {
+            Issue.record("expected .writeError, got \(String(describing: error))")
+            return
+        }
+        #expect(message.contains("contentPart"))
         #expect(!FileManager.default.fileExists(atPath: outURL.path))
     }
 
@@ -315,9 +446,14 @@ struct UnmodeledElementTests {
 
         let url = TemporaryPPTX.url("nested-content-part")
         defer { try? FileManager.default.removeItem(at: url) }
-        #expect(throws: PPTXError.self) {
+        let error = #expect(throws: PPTXError.self) {
             try PptxWriter.write(pres, to: url)
         }
+        guard case .writeError(let message)? = error else {
+            Issue.record("expected .writeError, got \(String(describing: error))")
+            return
+        }
+        #expect(message.contains("contentPart"))
         #expect(!FileManager.default.fileExists(atPath: url.path))
     }
 }
