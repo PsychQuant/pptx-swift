@@ -115,6 +115,29 @@ struct PackageInspector {
         }
     }
 
+    /// `r:link` values of the `a:blip` elements in a part, in document order
+    /// (PsychQuant/pptx-swift#5: external-link pictures).
+    func blipLinks(in partName: String) throws -> [String?] {
+        try xml(partName).nodes(forXPath: "//*[local-name()='blip']").map { node in
+            (node as? XMLElement)?.attribute(forLocalName: "link", uri: Self.nsR)?.stringValue
+        }
+    }
+
+    /// Depth (nesting level) of every `<p:grpSp>` element in a part, in
+    /// document order: 0 for a group that is a direct child of `p:spTree`, 1
+    /// for one nested one level deeper, and so on.
+    func groupShapeDepths(in partName: String) throws -> [Int] {
+        try xml(partName).nodes(forXPath: "//*[local-name()='grpSp']").map { node -> Int in
+            var depth = 0
+            var current = (node as? XMLElement)?.parent
+            while let element = current as? XMLElement {
+                if element.localName == "grpSp" { depth += 1 }
+                current = element.parent
+            }
+            return depth
+        }
+    }
+
     /// The part an internal relationship of `sourcePart` points at, resolved
     /// here rather than with `PptxReader.resolvePartPath`, so the reader's
     /// resolution cannot vouch for itself: percent-decoded, relative to the

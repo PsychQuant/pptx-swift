@@ -79,6 +79,17 @@ struct RealFileTests {
             .appendingPathComponent("pptx-rt-\(UUID().uuidString).pptx")
         defer { try? FileManager.default.removeItem(at: tempURL) }
 
+        // audio.pptx 含嵌入音訊（a:audioFile + p:timing 播放觸發）：pptx-swift 不建模這層，
+        // PptxWriter 拒絕寫出而不是默默遺失（PsychQuant/pptx-swift#5），round trip 因此預期失敗。
+        guard !pres.slides.contains(where: { $0.containsUnsupportedMedia }) else {
+            #expect(throws: PPTXError.self, "\(file.name) 含不支援的音訊／影片，寫出應拒絕") {
+                try PptxWriter.write(pres, to: tempURL)
+            }
+            #expect(!FileManager.default.fileExists(atPath: tempURL.path), "\(file.name) 寫出失敗不應留下檔案")
+            print("   \(file.name): 含音訊／影片，寫出如預期被拒絕")
+            return
+        }
+
         try PptxWriter.write(pres, to: tempURL)
 
         let fileSize = try FileManager.default.attributesOfItem(atPath: tempURL.path)[.size] as? Int ?? 0
