@@ -6,7 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-## [0.5.0] - 2026-09-24
+### Added
+
+- `Connector` models `p:cxnSp` (a connector/arrow) — `id`, `name`, `geometry`, `position`, `size`, `rotation`/`flipHorizontal`/`flipVertical` (via the same `a:xfrm` handling `Shape`/`Picture` use), `outline` (line color/width, `headEnd`/`tailEnd` arrow styles), `startConnection`/`endConnection` (`a:stCxn`/`a:endCxn`, the shapes and connection-site indices the connector is wired to), and `adjustments` (`a:avLst`/`a:gd`, a bent/curved connector's routing adjustments). `SlideElement` gains a `.connector` case. `ShapeGeometry` gains the 9 bent/curved connector presets (`straightConnector1`, `bentConnector2-5`, `curvedConnector2-5`); `ShapeOutline` gains `headEnd`/`tailEnd: LineEndStyle?` (usable by any shape's `a:ln`, not just connectors — `parseShapeProperties` now reads them for `Shape`/`Picture` too, though `PptxWriter` does not yet write `Shape`'s outline at all, a pre-existing gap this does not change).
+- `RawSlideElement` models any `p:spTree`/`p:grpSp` child `PptxReader` does not recognize as a typed structure (`mc:AlternateContent`, `p:contentPart`, or any future kind) — `localName`, a self-contained `xml` string (every namespace binding the fragment inherited, including the unprefixed default namespace, is re-declared on its own root so it stays well-formed wherever it is spliced), every `cNvPr/@id` found in its subtree, and whether it references a relationship. `SlideElement` gains a `.raw` case. `SlideElement.allElementIds` / `Slide.allElementIds` return every id on a slide including ones inside `.raw` elements, for id-collision-avoiding allocators that could not otherwise see them (#9, #6's lesson).
+- `PPTXError.rawElementGeometryUnsupported(shapeId:)`: thrown by `Slide.setGeometry(ofElementId:...)` when the id names (or lives inside) a `.raw` element, which has no typed geometry to set.
+
+### Fixed
+
+- `PptxReader` recognizes `p:cxnSp` (connectors) instead of silently dropping them — before, any connector vanished the moment `PptxWriter` rewrote the slide, with no error (#9). `PptxWriter` writes them back via `serializeConnector`.
+- `PptxReader`/`PptxWriter` no longer silently drop `mc:AlternateContent`, `p:contentPart`, or any other unrecognized `p:spTree`/`p:grpSp` child — they round-trip as self-contained raw XML via `RawSlideElement` (#9). `PptxWriter.write` refuses (`PPTXError.writeError`) to write a slide containing a `.raw` element that references a relationship (most commonly `p:contentPart`'s `r:id`, which it consists of nothing else): pptx-swift's relationship allocation rebuilds each slide's `.rels` from scratch, with no safe way to know whether the original `rId` a `.raw` element's XML names is still valid or collides with a freshly-allocated one — refusing beats risking a dangling or misdirected reference.
+
+### Changed
+
+- `GroupShape.containsElement(id:)` now checks `SlideElement.allElementIds` (covers every id in a `.raw` element's subtree, not just its first) instead of a single `elementId` per element.
+
+
 
 ### Added
 
