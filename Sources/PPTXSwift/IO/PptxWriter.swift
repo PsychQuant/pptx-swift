@@ -14,8 +14,12 @@ public struct PptxWriter {
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
 
+        // media 的 part 名稱與 content type（#1）：先決定，投影片的 image
+        // relationship、[Content_Types].xml 與 ppt/media/ 都依同一份配置
+        let media = MediaPartPlan(images: presentation.images)
+
         // 1. 寫入 [Content_Types].xml
-        try writeContentTypes(presentation, to: tempDir)
+        try writeContentTypes(presentation, media: media, to: tempDir)
 
         // 2. 寫入 _rels/.rels
         try writePackageRelationships(to: tempDir)
@@ -34,11 +38,11 @@ public struct PptxWriter {
 
         // 7. 寫入每張投影片
         for (index, slide) in presentation.slides.enumerated() {
-            try writeSlide(slide, index: index, to: tempDir)
+            try writeSlide(slide, index: index, media: media, to: tempDir)
         }
 
         // 8. 寫入 media
-        try writeMedia(presentation.images, to: tempDir)
+        try writeMedia(media, to: tempDir)
 
         // 9. 寫入 docProps
         try writeDocProps(presentation.properties, to: tempDir)
@@ -61,7 +65,14 @@ public struct PptxWriter {
 
     // MARK: - Content Types
 
-    private static func writeContentTypes(_ presentation: Presentation, to dir: URL) throws {
+    private static func writeContentTypes(_ presentation: Presentation, media: MediaPartPlan, to dir: URL) throws {
+        // 每個 media part 都要有 content type，否則整個套件無效（PowerPoint 會要求修復）
+        let builtInDefaults: Set<String> = ["rels", "xml", "png", "jpeg", "jpg"]
+        let mediaDefaults = media.defaultContentTypes
+            .filter { !builtInDefaults.contains($0.extension) }
+            .map { "  <Default Extension=\"\($0.extension)\" ContentType=\"\(escapeXML($0.contentType))\"/>\n" }
+            .joined()
+
         var xml = """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
@@ -70,7 +81,7 @@ public struct PptxWriter {
           <Default Extension="png" ContentType="image/png"/>
           <Default Extension="jpeg" ContentType="image/jpeg"/>
           <Default Extension="jpg" ContentType="image/jpeg"/>
-          <Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>
+        \(mediaDefaults)  <Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>
           <Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>
           <Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>
           <Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>
@@ -82,6 +93,10 @@ public struct PptxWriter {
             xml += """
               <Override PartName="/ppt/slides/slide\(index + 1).xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>
             """
+        }
+
+        for part in media.overriddenParts {
+            xml += "\n  <Override PartName=\"/ppt/media/\(escapeXML(part.name))\" ContentType=\"\(escapeXML(part.contentType))\"/>"
         }
 
         xml += "\n</Types>"
@@ -269,18 +284,19 @@ public struct PptxWriter {
 
     // MARK: - Slide
 
-    private static func writeSlide(_ slide: Slide, index: Int, to dir: URL) throws {
+    private static func writeSlide(_ slide: Slide, index: Int, media: MediaPartPlan, to dir: URL) throws {
         let slidesDir = dir.appendingPathComponent("ppt/slides")
         try FileManager.default.createDirectory(at: slidesDir, withIntermediateDirectories: true)
 
         let slideRelsDir = dir.appendingPathComponent("ppt/slides/_rels")
         try FileManager.default.createDirectory(at: slideRelsDir, withIntermediateDirectories: true)
 
-        // Shape tree XML
+        // Shape tree XML（圖片的 r:embed 由 imageRels 配置，rId1 保留給 slideLayout）
         var shapeXML = ""
         var nextId = 2
+        var imageRels = SlideImageRelationships(media: media)
         for element in slide.elements {
-            shapeXML += serializeElement(element, nextId: &nextId)
+            shapeXML += try serializeElement(element, nextId: &nextId, imageRels: &imageRels)
         }
 
         // Transition XML
@@ -305,24 +321,30 @@ public struct PptxWriter {
 
         try xml.write(to: slidesDir.appendingPathComponent("slide\(index + 1).xml"), atomically: true, encoding: .utf8)
 
-        // Slide relationships
+        // Slide relationships：slideLayout + 此投影片上每個被引用的 media part 各一個 image relationship
+        var imageRelsXML = ""
+        for entry in imageRels.entries {
+            imageRelsXML += "  <Relationship Id=\"\(entry.id)\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"../media/\(escapeXML(entry.partName))\"/>\n"
+        }
         let slideRels = """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
           <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
-        </Relationships>
+        \(imageRelsXML)</Relationships>
         """
         try slideRels.write(to: slideRelsDir.appendingPathComponent("slide\(index + 1).xml.rels"), atomically: true, encoding: .utf8)
     }
 
     // MARK: - Element Serialization
 
-    private static func serializeElement(_ element: SlideElement, nextId: inout Int) -> String {
+    private static func serializeElement(
+        _ element: SlideElement, nextId: inout Int, imageRels: inout SlideImageRelationships
+    ) throws -> String {
         switch element {
         case .shape(let shape):
             return serializeShape(shape, nextId: &nextId)
         case .picture(let picture):
-            return serializePicture(picture, nextId: &nextId)
+            return serializePicture(picture, embedId: try imageRels.embedId(for: picture), nextId: &nextId)
         case .graphicFrame(let frame):
             return serializeGraphicFrame(frame, nextId: &nextId)
         case .group:
@@ -379,9 +401,13 @@ public struct PptxWriter {
         """
     }
 
-    private static func serializePicture(_ picture: Picture, nextId: inout Int) -> String {
+    /// `embedId` is the relationship Id this slide's rels give the picture's
+    /// media part; nil writes `<a:blip/>` with no `r:embed` (a picture with no
+    /// media), never a reference to a relationship that does not exist.
+    private static func serializePicture(_ picture: Picture, embedId: String?, nextId: inout Int) -> String {
         let id = picture.id > 0 ? picture.id : nextId
         nextId = max(nextId, id + 1)
+        let blipXML = embedId.map { "<a:blip r:embed=\"\($0)\"/>" } ?? "<a:blip/>"
 
         return """
               <p:pic>
@@ -391,7 +417,7 @@ public struct PptxWriter {
                   <p:nvPr/>
                 </p:nvPicPr>
                 <p:blipFill>
-                  <a:blip r:embed="\(picture.imageRelationshipId)"/>
+                  \(blipXML)
                   <a:stretch><a:fillRect/></a:stretch>
                 </p:blipFill>
                 <p:spPr>
@@ -500,13 +526,15 @@ public struct PptxWriter {
 
     // MARK: - Media
 
-    private static func writeMedia(_ images: [MediaFile], to dir: URL) throws {
-        guard !images.isEmpty else { return }
+    /// Writes each planned part under its safe part name (never the raw
+    /// `MediaFile.fileName`, which could name a path outside `ppt/media/`).
+    private static func writeMedia(_ media: MediaPartPlan, to dir: URL) throws {
+        guard !media.parts.isEmpty else { return }
         let mediaDir = dir.appendingPathComponent("ppt/media")
         try FileManager.default.createDirectory(at: mediaDir, withIntermediateDirectories: true)
 
-        for image in images {
-            try image.data.write(to: mediaDir.appendingPathComponent(image.fileName))
+        for part in media.parts {
+            try part.data.write(to: mediaDir.appendingPathComponent(part.name))
         }
     }
 
@@ -548,5 +576,42 @@ public struct PptxWriter {
             .replacingOccurrences(of: ">", with: "&gt;")
             .replacingOccurrences(of: "\"", with: "&quot;")
             .replacingOccurrences(of: "'", with: "&apos;")
+    }
+}
+
+// MARK: - Slide image relationships
+
+/// The image relationships of one slide part, allocated as pictures are
+/// serialized: one relationship per distinct media part, `rId2` upward
+/// (`rId1` is the slide layout). The Id a picture carried in its source
+/// package (`Picture.imageRelationshipId`) is not reused — it belonged to a
+/// relationship part this writer does not reproduce.
+struct SlideImageRelationships {
+    let media: MediaPartPlan
+    private(set) var entries: [(id: String, partName: String)] = []
+    private var idByPartName: [String: String] = [:]
+
+    init(media: MediaPartPlan) {
+        self.media = media
+    }
+
+    /// The relationship Id for the picture's media part, or nil when the
+    /// picture names no media.
+    ///
+    /// - Throws: `PPTXError.writeError` when the picture names a media file
+    ///   that `Presentation.images` does not contain — writing it would leave
+    ///   an `r:embed` pointing at nothing.
+    mutating func embedId(for picture: Picture) throws -> String? {
+        guard let fileName = picture.mediaFileName else { return nil }
+        guard let partName = media.partName(forMediaFileName: fileName) else {
+            throw PPTXError.writeError(
+                "圖片 id=\(picture.id)（\(picture.name)）的 media '\(fileName)' 不在 Presentation.images 中，無法寫出 image relationship"
+            )
+        }
+        if let id = idByPartName[partName] { return id }
+        let id = "rId\(entries.count + 2)"
+        idByPartName[partName] = id
+        entries.append((id, partName))
+        return id
     }
 }

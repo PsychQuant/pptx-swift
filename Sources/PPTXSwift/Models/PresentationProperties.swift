@@ -31,16 +31,30 @@ public struct MediaFile {
         (fileName as NSString).pathExtension.lowercased()
     }
 
+    /// MIME type by file extension (case-insensitive); `application/octet-stream`
+    /// for an extension not in `contentTypesByExtension`.
     public var contentType: String {
-        switch fileExtension {
-        case "png": return "image/png"
-        case "jpg", "jpeg": return "image/jpeg"
-        case "gif": return "image/gif"
-        case "bmp": return "image/bmp"
-        case "tiff", "tif": return "image/tiff"
-        case "emf": return "image/x-emf"
-        case "wmf": return "image/x-wmf"
-        default: return "application/octet-stream"
-        }
+        Self.contentTypesByExtension[fileExtension] ?? "application/octet-stream"
     }
+
+    /// Media content types by lowercase file extension. The writer registers
+    /// these as `[Content_Types].xml` `Default` entries; it types any other
+    /// media part individually (see `MediaPartPlan`).
+    static let contentTypesByExtension: [String: String] = [
+        "png": "image/png",
+        "jpg": "image/jpeg", "jpeg": "image/jpeg", "jpe": "image/jpeg", "jfif": "image/jpeg",
+        "gif": "image/gif",
+        "bmp": "image/bmp",
+        "tif": "image/tiff", "tiff": "image/tiff",
+        "emf": "image/x-emf",
+        "wmf": "image/x-wmf",
+        "svg": "image/svg+xml",
+        "wdp": "image/vnd.ms-photo",
+        "pdf": "application/pdf",
+        "mp3": "audio/mpeg",
+        "m4a": "audio/mp4",
+        "wav": "audio/wav",
+        "mp4": "video/mp4",
+        "mov": "video/quicktime",
+    ]
 }
