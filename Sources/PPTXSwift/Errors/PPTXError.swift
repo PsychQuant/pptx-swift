@@ -9,6 +9,8 @@ public enum PPTXError: Error, LocalizedError {
     case invalidIndex(Int)
     case invalidParameter(String, String)
     case writeError(String)
+    /// ImageIO 無法從資料讀出點陣圖像素尺寸（含 EMF/WMF 等向量 metafile）
+    case undecodableImage(String)
 
     public var errorDescription: String? {
         switch self {
@@ -26,6 +28,8 @@ public enum PPTXError: Error, LocalizedError {
             return "參數錯誤 \(name): \(msg)"
         case .writeError(let msg):
             return "寫入錯誤: \(msg)"
+        case .undecodableImage(let msg):
+            return "無法解碼圖片: \(msg)"
         }
     }
 }
