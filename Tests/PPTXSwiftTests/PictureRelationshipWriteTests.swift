@@ -58,6 +58,27 @@ struct PictureRelationshipWriteTests {
         }
     }
 
+    @Test func `The package inspector reports a broken image relationship`() throws {
+        // Guards the guard: a written package whose image relationship target
+        // is tampered with must produce findings.
+        let png = try Self.pngData()
+        let pres = Self.presentation(
+            pictures: [[Self.picture(2, media: "photo.png")]],
+            images: [MediaFile(id: "photo.png", fileName: "photo.png", data: png)]
+        )
+        try TemporaryPPTX.written(pres) { url in
+            let package = try PackageInspector(url)
+            defer { package.cleanup() }
+            let relsURL = package.root.appendingPathComponent("ppt/slides/_rels/slide1.xml.rels")
+            let rels = try String(contentsOf: relsURL, encoding: .utf8)
+            #expect(rels.contains(#"Target="../media/photo.png""#), "the writer's image target is ../media/<part name>")
+            try rels.replacingOccurrences(of: #"Target="../media/photo.png""#, with: #"Target="../media/other.png""#)
+                .write(to: relsURL, atomically: true, encoding: .utf8)
+            let violations = try package.integrityViolations()
+            #expect(violations.contains { $0.contains("missing part ../media/other.png") }, "\(violations)")
+        }
+    }
+
     // MARK: - Scenario: existing (read) pictures survive a round trip
 
     @Test(arguments: RealFileTests.testFiles.map(\.file))

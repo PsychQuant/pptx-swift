@@ -115,10 +115,28 @@ struct PackageInspector {
         }
     }
 
-    /// The part an internal relationship of `sourcePart` points at.
+    /// The part an internal relationship of `sourcePart` points at, resolved
+    /// here rather than with `PptxReader.resolvePartPath`, so the reader's
+    /// resolution cannot vouch for itself: percent-decoded, relative to the
+    /// source part's directory (the package root for a leading `/` or for the
+    /// package's own relationships), `.` and `..` segments normalised; nil
+    /// when the target climbs above the root.
     func resolve(_ relationship: Relationship, from sourcePart: String) -> String? {
         guard !relationship.isExternal else { return nil }
-        return PptxReader.resolvePartPath(target: relationship.target, relativeTo: sourcePart)
+        let target = relationship.target.removingPercentEncoding ?? relationship.target
+        var stack: [String] = target.hasPrefix("/")
+            ? []
+            : sourcePart.split(separator: "/").dropLast().map(String.init)
+        for segment in target.split(separator: "/", omittingEmptySubsequences: true) {
+            if segment == "." { continue }
+            if segment == ".." {
+                guard !stack.isEmpty else { return nil }
+                stack.removeLast()
+            } else {
+                stack.append(String(segment))
+            }
+        }
+        return stack.isEmpty ? nil : stack.joined(separator: "/")
     }
 
     /// Package-level consistency findings, human-readable (empty = none
