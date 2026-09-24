@@ -74,8 +74,9 @@ public struct Presentation {
 
     // MARK: - Media
 
-    /// 取得圖片元素所嵌入的 media 檔（依 `Picture.mediaFileName` 比對 `MediaFile.fileName`）；
-    /// 圖片未連結 media 或 media 不存在時回傳 nil
+    /// 取得圖片元素所嵌入的 media 檔：以 `Picture.mediaFileName` 精確比對 `MediaFile.fileName`
+    /// （`ppt/media/` 下的直接檔名；讀檔時 `PptxReader` 只在 relationship 解析後確實落在
+    /// `ppt/media/` 且該 part 存在時才設定 `mediaFileName`）。圖片未連結 media 或 media 不存在時回傳 nil
     public func mediaFile(for picture: Picture) -> MediaFile? {
         guard let name = picture.mediaFileName else { return nil }
         return images.first { $0.fileName == name }

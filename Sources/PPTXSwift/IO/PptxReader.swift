@@ -13,6 +13,13 @@ public struct PptxReader {
         let id: String
         let typeURI: String
         let target: String
+        var targetMode: String? = nil
+        /// For image relationships: the file name directly under `ppt/media/`
+        /// that the target resolves to, when that part exists (see
+        /// `resolvedMediaFileName`). Nil otherwise.
+        var mediaFileName: String? = nil
+
+        var isExternal: Bool { targetMode?.caseInsensitiveCompare("External") == .orderedSame }
 
         var isSlide: Bool { typeURI.hasSuffix("/slide") }
         var isSlideMaster: Bool { typeURI.hasSuffix("/slideMaster") }
@@ -75,7 +82,13 @@ public struct PptxReader {
             // 投影片的 relationships
             let slideFileName = (slideRel.target as NSString).lastPathComponent
             let slideRelsURL = tempDir.appendingPathComponent("ppt/slides/_rels/\(slideFileName).rels")
-            let slideRelationships = (try? parseRelationships(from: slideRelsURL)) ?? []
+            let slidePartPath = resolvePartPath(target: slideRel.target, relativeTo: "ppt/presentation.xml")
+                ?? "ppt/slides/\(slideFileName)"
+            let slideRelationships = ((try? parseRelationships(from: slideRelsURL)) ?? []).map { rel in
+                var rel = rel
+                rel.mediaFileName = resolvedMediaFileName(for: rel, sourcePartPath: slidePartPath, packageRoot: tempDir)
+                return rel
+            }
 
             var slide = try parseSlide(from: slideXML, relationships: slideRelationships)
 
@@ -159,10 +172,55 @@ public struct PptxReader {
             let id = element.attribute(forName: "Id")?.stringValue ?? ""
             let typeStr = element.attribute(forName: "Type")?.stringValue ?? ""
             let target = element.attribute(forName: "Target")?.stringValue ?? ""
-            relationships.append(Rel(id: id, typeURI: typeStr, target: target))
+            let targetMode = element.attribute(forName: "TargetMode")?.stringValue
+            relationships.append(Rel(id: id, typeURI: typeStr, target: target, targetMode: targetMode))
         }
 
         return relationships
+    }
+
+    // MARK: - Part names
+
+    /// The media file name an image relationship points at, or nil unless all
+    /// hold: the relationship is an internal image relationship, its target
+    /// resolves (relative to `sourcePartPath`) to exactly `ppt/media/<name>`,
+    /// and that part exists as a regular file in the extracted package.
+    static func resolvedMediaFileName(for rel: Rel, sourcePartPath: String, packageRoot: URL) -> String? {
+        guard rel.isImage, !rel.isExternal,
+              let partPath = resolvePartPath(target: rel.target, relativeTo: sourcePartPath) else { return nil }
+        let segments = partPath.split(separator: "/")
+        guard segments.count == 3, segments[0] == "ppt", segments[1] == "media" else { return nil }
+
+        var isDirectory: ObjCBool = false
+        let fileURL = packageRoot.appendingPathComponent(partPath)
+        guard FileManager.default.fileExists(atPath: fileURL.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue else { return nil }
+        return String(segments[2])
+    }
+
+    /// Resolves a relationship `Target` to a package part name (OPC, ECMA-376
+    /// Part 2 §9.3): relative targets resolve against the source part's
+    /// directory, a leading `/` means the package root, targets are
+    /// percent-decoded, and `.` / `..` segments are normalised. Returns nil
+    /// for an empty target or one that climbs above the package root.
+    static func resolvePartPath(target: String, relativeTo sourcePartPath: String) -> String? {
+        let decoded = target.removingPercentEncoding ?? target
+        guard !decoded.isEmpty else { return nil }
+        var segments: [Substring] = decoded.hasPrefix("/")
+            ? []
+            : Array(sourcePartPath.split(separator: "/").dropLast())
+        for segment in decoded.split(separator: "/") {
+            switch segment {
+            case ".":
+                continue
+            case "..":
+                guard !segments.isEmpty else { return nil }
+                segments.removeLast()
+            default:
+                segments.append(segment)
+            }
+        }
+        return segments.isEmpty ? nil : segments.joined(separator: "/")
     }
 
     // MARK: - Theme
@@ -329,10 +387,10 @@ public struct PptxReader {
             picture.imageRelationshipId = blip.attribute(forLocalName: "embed", uri: nsR)?.stringValue
                 ?? blip.attribute(forName: "r:embed")?.stringValue
                 ?? ""
-            // r:embed → ppt/media/ 檔名（target 形如 "../media/image1.png"）
-            if let rel = relationships.first(where: { $0.id == picture.imageRelationshipId && $0.isImage }) {
-                picture.mediaFileName = (rel.target as NSString).lastPathComponent
-            }
+            // r:embed → ppt/media/ 檔名（已在讀取 slide relationships 時解析並驗證存在）
+            picture.mediaFileName = relationships
+                .first(where: { $0.id == picture.imageRelationshipId })?
+                .mediaFileName
         }
 
         // Position and size
@@ -677,7 +735,9 @@ public struct PptxReader {
         guard FileManager.default.fileExists(atPath: mediaDir.path) else { return [] }
 
         let fileManager = FileManager.default
-        let files = try fileManager.contentsOfDirectory(at: mediaDir, includingPropertiesForKeys: nil)
+        let files = try fileManager.contentsOfDirectory(at: mediaDir, includingPropertiesForKeys: [.isRegularFileKey])
+            // 只收 ppt/media/ 下的一般檔案；子目錄不是 media part，讀它會讓整份簡報開啟失敗
+            .filter { (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true }
 
         return try files.map { fileURL -> MediaFile in
             let data = try Data(contentsOf: fileURL)
