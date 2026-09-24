@@ -238,9 +238,13 @@ struct GroupShapeWriteTests {
             let rereadPictures = Self.allPictures(reread.slides[0].elements)
             try #require(rereadPictures.count == originalPictures.count)
             for (before, after) in zip(originalPictures, rereadPictures) {
-                let beforeMedia = original.mediaFile(for: before)
-                let afterMedia = reread.mediaFile(for: after)
-                #expect(afterMedia?.data == beforeMedia?.data, "nested picture id=\(before.id) lost its media")
+                // `try #require` both resolve, rather than comparing two
+                // Optionals directly: `nil == nil` would otherwise let this
+                // pass even if the reader failed to resolve the nested
+                // picture's media on both sides (Codex R1 LOW).
+                let beforeMedia = try #require(original.mediaFile(for: before), "nested picture id=\(before.id) has no media in the source fixture")
+                let afterMedia = try #require(reread.mediaFile(for: after), "nested picture id=\(before.id) lost its media after the round trip")
+                #expect(afterMedia.data == beforeMedia.data, "nested picture id=\(before.id) media bytes changed")
                 #expect(after.sourceRect == before.sourceRect, "nested picture id=\(before.id) lost its crop")
             }
         }

@@ -353,11 +353,16 @@ public struct PptxReader {
             slide.transition = parseTransition(transition)
         }
 
-        // 嵌入或連結的音訊／影片（a:audioFile／a:videoFile，通常伴隨 p:timing 播放觸發）：
-        // 目前不建模，PptxWriter 遇到會拒絕寫出而不是默默遺失（PsychQuant/pptx-swift#5）。
-        let unsupportedMedia = try xml.nodes(
-            forXPath: "//*[local-name()='audioFile'] | //*[local-name()='videoFile']"
-        )
+        // 嵌入或連結的音訊／影片：CT_ApplicationNonVisualDrawingProps 的 EG_Media
+        // choice group（ECMA-376 Part 1 §19.3.1.1）有五種，不是只有 audioFile／
+        // videoFile——漏掉任一種都會讓該投影片誤判為「可安全寫出」而默默遺失播放
+        // 內容（Codex R1 HIGH 2）。通常伴隨 p:timing 播放觸發，目前不建模，
+        // PptxWriter 遇到會拒絕寫出（PsychQuant/pptx-swift#5）。
+        let unsupportedMediaLocalNames = ["audioFile", "videoFile", "wavAudioFile", "audioCd", "quickTimeFile"]
+        let unsupportedMediaXPath = unsupportedMediaLocalNames
+            .map { "//*[local-name()='\($0)']" }
+            .joined(separator: " | ")
+        let unsupportedMedia = try xml.nodes(forXPath: unsupportedMediaXPath)
         slide.containsUnsupportedMedia = !unsupportedMedia.isEmpty
 
         return slide
