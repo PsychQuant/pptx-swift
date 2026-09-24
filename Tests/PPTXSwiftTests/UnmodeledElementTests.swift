@@ -132,7 +132,10 @@ struct UnmodeledElementTests {
             defer { package.cleanup() }
             let slideText = try #require(String(data: try Data(contentsOf: package.root.appendingPathComponent("ppt/slides/slide1.xml")), encoding: .utf8))
             #expect(slideText.contains("<a:avLst/>"))
-            #expect(!slideText.contains("<a:gd "))
+            // No leading-space assumption (Codex round 3 LOW: "<a:gd " alone
+            // would miss a hypothetical self-closing "<a:gd/>" with no
+            // attributes) — any spelling of the tag name is excluded.
+            #expect(!slideText.contains("<a:gd"))
         }
     }
 
