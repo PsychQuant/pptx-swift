@@ -52,3 +52,51 @@ public enum NativeAspect {
         return "未知格式"
     }
 }
+
+// MARK: - Aspect fit
+
+/// Which dimension of an extent is held fixed when fitting to native aspect.
+public enum AspectAnchor: String, CaseIterable {
+    case width
+    case height
+}
+
+public extension NativeAspect {
+    /// Keeps the anchored dimension of `size` and derives the other from the
+    /// image's pixel aspect ratio, rounding half away from zero to whole EMU.
+    ///
+    /// Example: a 1600 × 1200 image anchored at width 3,600,000 EMU (10 cm)
+    /// yields height 2,700,000 EMU (7.5 cm).
+    ///
+    /// - Throws: `PPTXError.invalidParameter` when the pixel dimensions or the
+    ///   anchored dimension are not positive, or the derived dimension falls
+    ///   outside the OOXML coordinate range.
+    static func fittedSize(
+        keeping anchor: AspectAnchor, of size: Size, pixelWidth: Int, pixelHeight: Int
+    ) throws -> Size {
+        guard pixelWidth > 0, pixelHeight > 0 else {
+            throw PPTXError.invalidParameter(
+                "pixelDimensions", "像素尺寸必須大於 0（收到 \(pixelWidth) × \(pixelHeight)）"
+            )
+        }
+        let anchored = anchor == .width ? size.width : size.height
+        guard anchored > 0 else {
+            throw PPTXError.invalidParameter(anchor.rawValue, "錨定邊必須大於 0 EMU（收到 \(anchored)）")
+        }
+
+        let ratio = anchor == .width
+            ? Double(pixelHeight) / Double(pixelWidth)
+            : Double(pixelWidth) / Double(pixelHeight)
+        let derived = (Double(anchored) * ratio).rounded()
+        guard derived >= 1, derived <= Double(PPTXMetric.coordinateLimitEmu) else {
+            throw PPTXError.invalidParameter(
+                anchor == .width ? "height" : "width",
+                "依原生比例推得的尺寸超出 OOXML 座標範圍（\(derived) EMU）"
+            )
+        }
+
+        return anchor == .width
+            ? Size(width: anchored, height: Int(derived))
+            : Size(width: Int(derived), height: anchored)
+    }
+}
