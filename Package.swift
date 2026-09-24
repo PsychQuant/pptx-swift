@@ -21,7 +21,10 @@ let package = Package(
         ),
         .testTarget(
             name: "PPTXSwiftTests",
-            dependencies: ["PPTXSwift"],
+            dependencies: [
+                "PPTXSwift",
+                .product(name: "OOXMLSwift", package: "ooxml-swift"),
+            ],
             resources: [.copy("Fixtures")]
         )
     ]
