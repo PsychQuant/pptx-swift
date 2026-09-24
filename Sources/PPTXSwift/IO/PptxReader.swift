@@ -432,8 +432,20 @@ public struct PptxReader {
             case "grpSp":
                 let group = try parseGroupShape(element, relationships: relationships)
                 elements.append(.group(group))
-            default:
+            case "cxnSp":
+                let connector = try parseConnector(element)
+                elements.append(.connector(connector))
+            case "nvGrpSpPr", "grpSpPr":
+                // spTree／grpSp 自己的結構性子元素（非視覺屬性、群組屬性），
+                // 不是「內容」——PptxWriter 的樣板本來就無條件寫出它自己的
+                // 版本，原樣保留這兩個會在輸出裡重複一份，不是遺失，是損毀。
+                // 跟 #7 以前既有行為一致：一直是 default: break 的一部分。
                 break
+            default:
+                // 其餘未建模的子元素（`mc:AlternateContent`、`p:contentPart`、
+                // 或任何未來的未知元素）：原樣保留其 XML，不默默丟掉
+                // （PsychQuant/pptx-swift#9）。
+                elements.append(.raw(try parseRawSlideElement(element)))
             }
         }
 
@@ -679,8 +691,14 @@ public struct PptxReader {
                 group.elements.append(.graphicFrame(try parseGraphicFrame(childElement)))
             case "grpSp":
                 group.elements.append(.group(try parseGroupShape(childElement, relationships: relationships)))
-            default:
+            case "cxnSp":
+                group.elements.append(.connector(try parseConnector(childElement)))
+            case "nvGrpSpPr", "grpSpPr":
+                // 群組自己的結構性子元素，不是內容——理由同 parseShapeTree
+                // 的同名 case（PsychQuant/pptx-swift#9）。
                 break
+            default:
+                group.elements.append(.raw(try parseRawSlideElement(childElement)))
             }
         }
 
@@ -743,8 +761,142 @@ public struct PptxReader {
             if let srgb = try? ln.nodes(forXPath: ".//*[local-name()='srgbClr']").first as? XMLElement {
                 shapeOutline.color = srgb.attribute(forName: "val")?.stringValue
             }
+            // 線條端點（`a:headEnd`／`a:tailEnd`）：任何 `a:ln` 上 schema 都允許，
+            // 最常見於連接線（`p:cxnSp`）表示箭頭方向（PsychQuant/pptx-swift#9）。
+            func lineEnd(_ localName: String) -> LineEndStyle? {
+                guard let el = try? ln.nodes(forXPath: "*[local-name()='\(localName)']").first as? XMLElement else { return nil }
+                let type = el.attribute(forName: "type")?.stringValue
+                let width = el.attribute(forName: "w")?.stringValue
+                let length = el.attribute(forName: "len")?.stringValue
+                guard type != nil || width != nil || length != nil else { return nil }
+                return LineEndStyle(type: type, width: width, length: length)
+            }
+            shapeOutline.headEnd = lineEnd("headEnd")
+            shapeOutline.tailEnd = lineEnd("tailEnd")
             outline = shapeOutline
         }
+    }
+
+    // MARK: - Connector
+
+    /// `p:cxnSp`（PsychQuant/pptx-swift#9）：`spPr` 是與 `p:sp`／`p:pic` 完全
+    /// 相同的 complex type，因此重用 `parseShapeProperties`；連接線特有的只有
+    /// `p:cNvCxnSpPr` 底下可能的 `a:stCxn`／`a:endCxn`。
+    private static func parseConnector(_ element: XMLElement) throws -> Connector {
+        var connector = Connector()
+
+        if let cNvPr = try element.nodes(forXPath: ".//*[local-name()='cNvPr']").first as? XMLElement {
+            connector.id = Int(cNvPr.attribute(forName: "id")?.stringValue ?? "0") ?? 0
+            connector.name = cNvPr.attribute(forName: "name")?.stringValue ?? ""
+        }
+
+        if let cNvCxnSpPr = try element.nodes(
+            forXPath: "./*[local-name()='nvCxnSpPr']/*[local-name()='cNvCxnSpPr']"
+        ).first as? XMLElement {
+            func connection(_ localName: String) -> ConnectionSite? {
+                guard let el = try? cNvCxnSpPr.nodes(forXPath: "*[local-name()='\(localName)']").first as? XMLElement,
+                      let shapeId = Int(el.attribute(forName: "id")?.stringValue ?? ""),
+                      let idx = Int(el.attribute(forName: "idx")?.stringValue ?? "") else { return nil }
+                return ConnectionSite(shapeId: shapeId, index: idx)
+            }
+            connector.startConnection = connection("stCxn")
+            connector.endConnection = connection("endCxn")
+        }
+
+        if let spPr = try element.nodes(forXPath: "./*[local-name()='spPr']").first as? XMLElement {
+            var fill: ShapeFill? = nil
+            parseShapeProperties(spPr, position: &connector.position, size: &connector.size,
+                               rotation: &connector.rotation, flipHorizontal: &connector.flipHorizontal, flipVertical: &connector.flipVertical,
+                               fill: &fill, outline: &connector.outline, geometry: &connector.geometry)
+        }
+
+        return connector
+    }
+
+    // MARK: - Raw (unmodeled) elements
+
+    /// An element `parseShapeTree`／`parseGroupShape` does not recognize
+    /// (`mc:AlternateContent`, `p:contentPart`, or anything future): captures
+    /// its exact original XML self-contained (see `RawSlideElement.xml`), every
+    /// `cNvPr/@id` in its subtree, and whether it references any relationship
+    /// (PsychQuant/pptx-swift#9).
+    private static func parseRawSlideElement(_ element: XMLElement) throws -> RawSlideElement {
+        let localName = element.localName ?? element.name ?? "unknown"
+
+        let ids = try element.nodes(forXPath: ".//*[local-name()='cNvPr']/@id")
+            .compactMap { $0.stringValue }
+            .compactMap { Int($0) }
+
+        // Foundation 的 XPath 在 attribute node 上不可靠地支援
+        // namespace-uri()（PackageInspector.relationshipReferences 的既有
+        // 註解），所以撈全部屬性後在 Swift 端核對 .uri，不靠 XPath 判斷命名空間
+        // （跟 #5／#7 既有的偵測手法一致）。
+        let allAttrs = (try? element.nodes(forXPath: "(@* | .//@*)")) ?? []
+        let referencesRelationship = allAttrs.contains { $0.uri == nsR }
+
+        return RawSlideElement(
+            localName: localName,
+            xml: selfContainedXMLString(for: element),
+            elementIds: ids,
+            referencesRelationship: referencesRelationship
+        )
+    }
+
+    /// `element.xmlString`, but with every namespace prefix used anywhere in
+    /// the subtree re-declared as an `xmlns:` attribute on the fragment's own
+    /// root — `XMLElement.xmlString` on a node detached from its parsed
+    /// document does not re-declare a namespace the node only inherited from
+    /// an ancestor (verified empirically against Foundation's actual
+    /// behavior, not documented), so `<mc:AlternateContent>` copied out of a
+    /// `<p:spTree xmlns:mc="...">` would otherwise silently lose the binding
+    /// that makes its own `mc:` tag names resolvable once it is spliced into
+    /// a different XML document (PsychQuant/pptx-swift#9).
+    static func selfContainedXMLString(for element: XMLElement) -> String {
+        var raw = element.xmlString
+
+        // Every ancestor's locally-declared namespaces, outermost first so a
+        // closer (later) re-declaration of the same prefix overrides it —
+        // this is the effective in-scope binding at `element`'s position,
+        // reconstructed by hand because `XMLElement.resolveNamespace(forName:)`
+        // does not reliably walk the ancestor chain (verified empirically).
+        var chain: [XMLElement] = []
+        var current: XMLNode? = element
+        while let el = current as? XMLElement {
+            chain.append(el)
+            current = el.parent
+        }
+        var inScope: [String: String] = [:]
+        for el in chain.reversed() {
+            for ns in el.namespaces ?? [] {
+                guard let name = ns.name, let uri = ns.stringValue else { continue }
+                inScope[name] = uri
+            }
+        }
+
+        // Prefixes actually written into the serialized fragment — element
+        // and attribute qualified names only (`<prefix:name`, ` prefix:name=`),
+        // never inside an attribute *value*, which this pattern cannot match
+        // (it requires `<` or whitespace immediately before the prefix).
+        guard let regex = try? NSRegularExpression(pattern: #"[<\s]([A-Za-z][\w.\-]*):[A-Za-z]"#) else { return raw }
+        let fullRange = NSRange(raw.startIndex..<raw.endIndex, in: raw)
+        var usedPrefixes = Set<String>()
+        regex.enumerateMatches(in: raw, range: fullRange) { match, _, _ in
+            guard let match, let range = Range(match.range(at: 1), in: raw) else { return }
+            usedPrefixes.insert(String(raw[range]))
+        }
+
+        let missingDeclarations = usedPrefixes.sorted().compactMap { prefix -> String? in
+            guard prefix != "xmlns" else { return nil }  // regex artifact of matching " xmlns:foo="
+            guard let uri = inScope[prefix] else { return nil }
+            // 已經在片段自己的某個節點上局部宣告過（例如 mc:Choice 自己的
+            // Requires 擴充命名空間），不要疊加重複宣告。
+            guard !raw.contains("xmlns:\(prefix)=") else { return nil }
+            return "xmlns:\(prefix)=\"\(uri.replacingOccurrences(of: "\"", with: "&quot;"))\""
+        }
+        guard !missingDeclarations.isEmpty,
+              let tagNameRange = raw.range(of: #"^<[A-Za-z][\w:.\-]*"#, options: .regularExpression) else { return raw }
+        raw.insert(contentsOf: " " + missingDeclarations.joined(separator: " "), at: tagNameRange.upperBound)
+        return raw
     }
 
     // MARK: - Text Body

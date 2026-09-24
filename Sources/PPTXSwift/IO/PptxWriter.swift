@@ -60,13 +60,50 @@ public struct PptxWriter {
     ///   media (any DrawingML `EG_Media` element, usually paired with a
     ///   `p:timing` play trigger) or a transition sound (`p:snd`): the model
     ///   does not carry that structure, so writing would silently drop
-    ///   playback (PsychQuant/pptx-swift#5).
+    ///   playback (PsychQuant/pptx-swift#5). Also throws when a slide has a
+    ///   `.raw` (unmodeled) element that references a relationship (`r:id`,
+    ///   `r:embed`, `r:link`, …): see the decision note below
+    ///   (PsychQuant/pptx-swift#9).
     private static func validateSupportedContent(_ presentation: Presentation) throws {
-        for (index, slide) in presentation.slides.enumerated() where slide.containsUnsupportedMedia {
-            throw PPTXError.writeError(
-                "投影片 \(index + 1) 含音訊、影片或換場音效：pptx-swift 尚未建模播放觸發、時間軸（p:timing）與換場音效，寫出會遺失播放能力，拒絕存檔"
-            )
+        for (index, slide) in presentation.slides.enumerated() {
+            if slide.containsUnsupportedMedia {
+                throw PPTXError.writeError(
+                    "投影片 \(index + 1) 含音訊、影片或換場音效：pptx-swift 尚未建模播放觸發、時間軸（p:timing）與換場音效，寫出會遺失播放能力，拒絕存檔"
+                )
+            }
+            // 未建模子元素（mc:AlternateContent／p:contentPart／其他）本身用
+            // raw XML 原樣寫回（見 serializeElement 的 .raw case），但若它
+            // 引用了 relationship，pptx-swift 的 relationship 配置是「整份
+            // 投影片重新配置」（SlideImageRelationships 從 rId2 起算，#1 既有
+            // 設計），無法安全地知道原始 rId 在新配置下是否仍指向同一個
+            // relationship、或撞上新配的 rId。與其冒險寫出一個 rId 失效或
+            // 指錯 part 的檔案，選擇明確拒絕——跟 #5 對音訊／影片的選擇一致
+            // （見 issue #9「決定與理由」的完整討論：曾考慮重新配置引用的
+            // relationship 並改寫 raw XML 裡的 rId，但那需要在 raw 文字裡精準
+            // 定位並替換屬性值，複雜度與風險都遠超過這張 issue 的範圍）。
+            if let offending = firstUnwritableRawSlideElement(in: slide.elements) {
+                throw PPTXError.writeError(
+                    "投影片 \(index + 1) 含未建模的子元素 <\(offending.localName)> 引用了 relationship："
+                        + "pptx-swift 無法安全地確保該 rId 在重新配置後仍有效、且不與新配的 rId 衝突，拒絕存檔"
+                )
+            }
         }
+    }
+
+    /// The first `.raw` element (at any nesting depth) whose subtree
+    /// references a relationship, or nil.
+    private static func firstUnwritableRawSlideElement(in elements: [SlideElement]) -> RawSlideElement? {
+        for element in elements {
+            switch element {
+            case .raw(let raw) where raw.referencesRelationship:
+                return raw
+            case .group(let group):
+                if let found = firstUnwritableRawSlideElement(in: group.elements) { return found }
+            default:
+                continue
+            }
+        }
+        return nil
     }
 
     /// Normalizes an `ST_Angle` value (60,000ths of a degree) into the
@@ -415,6 +452,15 @@ public struct PptxWriter {
             return serializeGraphicFrame(frame, nextId: &nextId)
         case .group(let group):
             return try serializeGroupShape(group, nextId: &nextId, imageRels: &imageRels)
+        case .connector(let connector):
+            return serializeConnector(connector, nextId: &nextId)
+        case .raw(let raw):
+            // 原樣寫回已經是 self-contained 的原始 XML（`RawSlideElement.xml`，見
+            // `PptxReader.selfContainedXMLString`），不重新組裝、不動 nextId
+            // （沒有型別化的 id 欄位可以配置）。relationship 引用的安全性已在
+            // `validateSupportedContent` 把關，這裡不會走到不安全的情況
+            // （PsychQuant/pptx-swift#9）。
+            return "      \(raw.xml)\n"
         }
     }
 
@@ -507,6 +553,72 @@ public struct PptxWriter {
               </p:sp>
 
         """
+    }
+
+    /// `p:cxnSp`（PsychQuant/pptx-swift#9）：`spPr` 用與 `p:sp`／`p:pic` 相同的
+    /// `xfrmTransformAttributes` 共用 helper；連接線特有的只有 `p:cNvCxnSpPr`
+    /// 底下的 `a:stCxn`／`a:endCxn` 與線條端點（`a:ln` 的 `headEnd`／`tailEnd`）。
+    private static func serializeConnector(_ connector: Connector, nextId: inout Int) -> String {
+        let id = connector.id > 0 ? connector.id : nextId
+        nextId = max(nextId, id + 1)
+
+        var cNvCxnSpPrXML = ""
+        if let start = connector.startConnection {
+            cNvCxnSpPrXML += "<a:stCxn id=\"\(start.shapeId)\" idx=\"\(start.index)\"/>"
+        }
+        if let end = connector.endConnection {
+            cNvCxnSpPrXML += "<a:endCxn id=\"\(end.shapeId)\" idx=\"\(end.index)\"/>"
+        }
+
+        let xfrmAttrs = xfrmTransformAttributes(
+            rotation: connector.rotation, flipHorizontal: connector.flipHorizontal, flipVertical: connector.flipVertical)
+        let lnXML = connector.outline.map(serializeConnectorLine) ?? ""
+
+        return """
+              <p:cxnSp>
+                <p:nvCxnSpPr>
+                  <p:cNvPr id="\(id)" name="\(escapeXML(connector.name))"/>
+                  <p:cNvCxnSpPr>\(cNvCxnSpPrXML)</p:cNvCxnSpPr>
+                  <p:nvPr/>
+                </p:nvCxnSpPr>
+                <p:spPr>
+                  <a:xfrm\(xfrmAttrs)>
+                    <a:off x="\(connector.position.x)" y="\(connector.position.y)"/>
+                    <a:ext cx="\(connector.size.width)" cy="\(connector.size.height)"/>
+                  </a:xfrm>
+                  <a:prstGeom prst="\(connector.geometry.rawValue)"><a:avLst/></a:prstGeom>
+                  \(lnXML)
+                </p:spPr>
+              </p:cxnSp>
+
+        """
+    }
+
+    /// `<a:ln>`（ECMA-376 `CT_LineProperties`，child order: fill, then
+    /// `headEnd`／`tailEnd`）：width／color／兩個端點皆為可選，全部缺席時
+    /// 省略整個 `<a:ln>` 標籤——跟 `xfrmTransformAttributes` 同一個「沒有值
+    /// 就不寫屬性／標籤」慣例。
+    private static func serializeConnectorLine(_ outline: ShapeOutline) -> String {
+        var attrs = ""
+        if let width = outline.width { attrs += " w=\"\(width)\"" }
+
+        var children = ""
+        if let color = outline.color {
+            children += "<a:solidFill><a:srgbClr val=\"\(color)\"/></a:solidFill>"
+        }
+        func lineEndXML(_ tag: String, _ style: LineEndStyle?) -> String {
+            guard let style else { return "" }
+            var lineAttrs = ""
+            if let type = style.type { lineAttrs += " type=\"\(type)\"" }
+            if let width = style.width { lineAttrs += " w=\"\(width)\"" }
+            if let length = style.length { lineAttrs += " len=\"\(length)\"" }
+            return "<a:\(tag)\(lineAttrs)/>"
+        }
+        children += lineEndXML("headEnd", outline.headEnd)
+        children += lineEndXML("tailEnd", outline.tailEnd)
+
+        guard !attrs.isEmpty || !children.isEmpty else { return "" }
+        return "<a:ln\(attrs)>\(children)</a:ln>"
     }
 
     /// `embedId`／`linkId` are the relationship Ids this slide's rels give

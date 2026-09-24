@@ -40,6 +40,12 @@ public struct Slide {
                 return frame.table?.getText()
             case .group(let group):
                 return group.getText()
+            case .connector:
+                return nil
+            case .raw:
+                // 未建模的原始 XML（PsychQuant/pptx-swift#9）：內容不透明，
+                // 不嘗試從中挖文字。
+                return nil
             }
         }
         .filter { !$0.isEmpty }
@@ -79,6 +85,12 @@ public enum SlideElement {
     case picture(Picture)
     case graphicFrame(GraphicFrame)
     case group(GroupShape)
+    /// 連接線／箭頭（`p:cxnSp`，PsychQuant/pptx-swift#9）。
+    case connector(Connector)
+    /// pptx-swift 無法解析成型別化結構的子元素（`mc:AlternateContent`、
+    /// `p:contentPart`、或任何未來的未知元素），原樣保留其 XML
+    /// （PsychQuant/pptx-swift#9）。
+    case raw(RawSlideElement)
 }
 
 // MARK: - Slide Transition

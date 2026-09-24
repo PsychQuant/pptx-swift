@@ -13,6 +13,10 @@ public enum PPTXError: Error, LocalizedError {
     case undecodableImage(String)
     /// 元素位於群組（GroupShape）內或本身即為群組：父層 transform 會疊加，公分幾何設定不支援
     case groupGeometryUnsupported(shapeId: Int)
+    /// 元素是 `RawSlideElement`（pptx-swift 無法解析成型別化結構的子元素，例如
+    /// `mc:AlternateContent`／`p:contentPart`）：沒有可設定的幾何欄位
+    /// （PsychQuant/pptx-swift#9）
+    case rawElementGeometryUnsupported(shapeId: Int)
 
     public var errorDescription: String? {
         switch self {
@@ -34,6 +38,8 @@ public enum PPTXError: Error, LocalizedError {
             return "無法解碼圖片: \(msg)"
         case .groupGeometryUnsupported(let shapeId):
             return "形狀 id=\(shapeId) 位於群組內或本身即為群組：群組子元素的座標會與父層 transform 疊加，目前不支援設定群組幾何"
+        case .rawElementGeometryUnsupported(let shapeId):
+            return "id=\(shapeId) 是未建模的原始 XML 內容（例如 mc:AlternateContent／p:contentPart），沒有可設定的幾何欄位"
         }
     }
 }
