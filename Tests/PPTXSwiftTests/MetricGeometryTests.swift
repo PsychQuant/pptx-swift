@@ -26,10 +26,24 @@ final class MetricGeometryTests: XCTestCase {
     // MARK: - Round-trip stability (spec Scenario: Round-trip stability)
 
     func testRoundTripStability() throws {
+        // Each input is a whole number of EMU, so both directions are exact:
+        // the recovered cm equals the input, and it converts back to the same EMU.
         for x in [0.0, 0.01, 2.54, 33.33, 100.0] {
-            let recovered = PPTXMetric.cm(fromEmu: try PPTXMetric.emu(fromCm: x))
-            XCTAssertLessThan(abs(recovered - x), 0.0001,
-                              "round-trip for \(x) cm drifted to \(recovered)")
+            let emu = try PPTXMetric.emu(fromCm: x)
+            let recovered = PPTXMetric.cm(fromEmu: emu)
+            XCTAssertEqual(recovered, x, "round-trip for \(x) cm drifted to \(recovered)")
+            XCTAssertEqual(try PPTXMetric.emu(fromCm: recovered), emu, "EMU round-trip for \(x) cm")
+        }
+    }
+
+    func testOffGridRoundTripIsExactInEMUAndWithinHalfAnEMUInCm() throws {
+        // Not whole EMU: the cm value cannot survive exactly, but the EMU value
+        // must, and the cm error is bounded by rounding (half an EMU).
+        for x in [1.2345678, 0.0000001, 33.333333, 99.9999999, -7.7777777] {
+            let emu = try PPTXMetric.emu(fromCm: x)
+            let recovered = PPTXMetric.cm(fromEmu: emu)
+            XCTAssertEqual(try PPTXMetric.emu(fromCm: recovered), emu, "EMU round-trip for \(x) cm")
+            XCTAssertLessThanOrEqual(abs(recovered - x), 0.5 / 360_000 + 1e-12, "\(x) cm")
         }
     }
 

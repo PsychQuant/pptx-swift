@@ -36,7 +36,7 @@ struct PictureMediaTests {
     /// cropped.pptx with its single image relationship (rId2, `../media/image1.png`)
     /// rewritten, and optional extra files dropped into the package.
     static func tamperedCropped(
-        relationship: String?, extraFiles: [String: Data] = [:]
+        relationship: String?, extraFiles: [String: Data] = [:], renames: [String: String] = [:]
     ) throws -> URL {
         let fixture = try #require(RealFileTests.fixturePath("cropped.pptx"))
         let dir = try ZipHelper.unzip(fixture)
@@ -49,6 +49,9 @@ struct PictureMediaTests {
         rels = rels.replacingOccurrences(of: original, with: relationship ?? "")
         try rels.write(to: relsURL, atomically: true, encoding: .utf8)
 
+        for (from, to) in renames {
+            try FileManager.default.moveItem(at: dir.appendingPathComponent(from), to: dir.appendingPathComponent(to))
+        }
         for (path, data) in extraFiles {
             let url = dir.appendingPathComponent(path)
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -109,6 +112,26 @@ struct PictureMediaTests {
     func `Equivalent targets for ppt/media/image1.png all resolve`(target: String) throws {
         let url = try Self.tamperedCropped(relationship: Self.imageRel(target: target))
         #expect(try Self.mediaNames(of: url).allSatisfy { $0 == "image1.png" })
+    }
+
+    @Test func `A percent-encoded target resolves to the decoded media file name end to end`() throws {
+        let url = try Self.tamperedCropped(
+            relationship: Self.imageRel(target: "../media/image%201.png"),
+            renames: ["ppt/media/image1.png": "ppt/media/image 1.png"]
+        )
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let pres = try PptxReader.read(from: url)
+        #expect(pres.images.map(\.fileName) == ["image 1.png"])
+        let pictures = pres.slides.flatMap(\.pictures)
+        #expect(!pictures.isEmpty)
+        for picture in pictures {
+            #expect(picture.mediaFileName == "image 1.png")
+            let media = try #require(pres.mediaFile(for: picture))
+            #expect(media.fileName == "image 1.png")
+            let pixels = try NativeAspect.pixelDimensions(of: media.data)
+            #expect(pixels.width > 0 && pixels.height > 0)
+        }
     }
 
     static let partResolutionCases: [(target: String, source: String, expected: String?)] = [
