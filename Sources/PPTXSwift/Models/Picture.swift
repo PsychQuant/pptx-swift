@@ -11,6 +11,11 @@ public struct Picture {
     /// r:embed 所指 media part 的檔名（ppt/media/ 下，例 "image1.png"）；
     /// 讀檔時由投影片 relationships 解析，無法解析時為 nil
     public var mediaFileName: String?
+    /// 外部連結圖片（`<a:blip r:link="...">`）所指的原始 Target（通常是 URL 或外部
+    /// 檔案路徑）。讀檔時只在該 relationship 確實是 external（`TargetMode="External"`）
+    /// 時才設定；有 `mediaFileName`（embedded）時本欄位為 nil——一張圖片不會同時是
+    /// embedded 又是 external link。
+    public var externalImageTarget: String?
     /// `<a:srcRect>` of the picture's `blipFill` (crop); nil when absent.
     public var sourceRect: PictureSourceRect?
 
@@ -22,6 +27,7 @@ public struct Picture {
         size: Size = Size(),
         imageRelationshipId: String = "",
         mediaFileName: String? = nil,
+        externalImageTarget: String? = nil,
         sourceRect: PictureSourceRect? = nil
     ) {
         self.id = id
@@ -31,6 +37,7 @@ public struct Picture {
         self.size = size
         self.imageRelationshipId = imageRelationshipId
         self.mediaFileName = mediaFileName
+        self.externalImageTarget = externalImageTarget
         self.sourceRect = sourceRect
     }
 }
