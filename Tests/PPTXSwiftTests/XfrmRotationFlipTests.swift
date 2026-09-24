@@ -354,7 +354,7 @@ struct XfrmRotationFlipTests {
     /// and, per the same review round, exercises XML padding and a token
     /// that collapse cannot repair (an internal space splitting the word).
     @Test(arguments: [
-        (" true ", true), ("\ttrue\n", true), ("1", true), (" 1 ", true),
+        (" true ", true), ("\ttrue\n", true), ("\rtrue\r", true), ("1", true), (" 1 ", true),
         ("true", true), ("false", false), ("0", false), (" 0 ", false),
         ("tr ue", false),        // collapse cannot join a split token
         ("\u{00A0}true\u{00A0}", false),  // non-breaking space is not XML whitespace
