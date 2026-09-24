@@ -34,14 +34,19 @@ public struct PptxReader {
     private static let nsP = "http://schemas.openxmlformats.org/presentationml/2006/main"
 
     /// An `xsd:boolean` attribute value. The lexical space is `{true, false,
-    /// 1, 0}` (case-sensitive); accepting both spellings here is slightly
-    /// more permissive than the XSD requires, on the theory that a reader
-    /// should never reject a file over which of the two equally-valid forms
-    /// a producer chose to emit — `PptxWriter` itself always emits `"1"`.
-    /// Anything else (including an absent attribute) is `false`, matching
-    /// the schema default for `flipH`／`flipV`.
+    /// 1, 0}` (case-sensitive) with the `whiteSpace` facet `collapse` — a
+    /// producer may pad the value with leading/trailing XML whitespace
+    /// (`" true "`) and it still means `true`. Accepting both spellings is
+    /// slightly more permissive than strictly necessary, on the theory that
+    /// a reader should never reject a file over which of the two equally
+    /// valid forms a producer chose to emit — `PptxWriter` itself always
+    /// emits `"1"`. Anything else (including an absent attribute) is
+    /// `false`, matching the schema default for `flipH`／`flipV`
+    /// (Codex review round 1, LOW: the original version compared the raw,
+    /// untrimmed string).
     static func parseXSDBoolean(_ value: String?) -> Bool {
-        value == "1" || value == "true"
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) else { return false }
+        return trimmed == "1" || trimmed == "true"
     }
 
     // MARK: - Public API

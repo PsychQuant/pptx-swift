@@ -7,14 +7,28 @@ public struct GraphicFrame {
     public var position: Position
     public var size: Size
     /// 旋轉角度（`p:xfrm` 的 `rot`，ECMA-376 `ST_Angle`：以 60,000 分之一度為單位的
-    /// 整數，順時針為正）。`p:xfrm` 與形狀／圖片用的 `a:xfrm` 是同一個 complex type
-    /// （`a:CT_Transform2D`），只是元素前綴依所在 schema（`CT_GraphicalObjectFrame`）
-    /// 而不同，`rot`／`flipH`／`flipV` 三個屬性完全比照辦理。讀取時原樣保留；0
-    /// （schema 預設）表示未旋轉，寫出時省略 `rot` 屬性。正規化規則見 `PptxWriter`。
+    /// 整數，順時針為正）。`p:xfrm` 用的型別確實就是 `a:CT_Transform2D`——與形狀／
+    /// 圖片的 `a:xfrm` 同一個 complex type，只是元素前綴依所在 schema
+    /// （`CT_GraphicalObjectFrame`）而不同——`rot`／`flipH`／`flipV` 三個屬性合法
+    /// 存在，寫出後是 schema-valid 的 XML（已用 datypic OOXML reference 與
+    /// MS-OI29500 §20.1.7.6 交叉核對，非憑印象）。讀取時原樣保留；0（schema 預設）
+    /// 表示未旋轉，寫出時省略 `rot` 屬性。正規化規則見 `PptxWriter`。
+    ///
+    /// **已知的跨應用程式落差（MS-OI29500 §20.1.7.6 明文的 deviation b）**：
+    /// 「the standard allows attributes flipH, flipV and rot to be applied to
+    /// a graphicFrame」但「In Office, attributes FlipH, flipV and rot are
+    /// ignored when applied to a graphicFrame」——也就是說，這三個屬性合法、
+    /// pptx-swift 正確地讀寫它們，但**真正的 Microsoft PowerPoint 開啟這個檔案時
+    /// 會忽略它們**，表格視覺上不會旋轉／翻轉；LibreOffice 則不受此限，會照
+    /// schema 字面套用（已用 headless `--convert-to pdf` 實測驗證：見 PR #7 報告
+    /// 的「LibreOffice 驗證」段落）。pptx-swift 仍然正確地往返這三個屬性——若不
+    /// 這樣做，一份原本就帶有 `rot` 的真實檔案（不論來源是哪個應用程式寫的）
+    /// 讀進來再存出去會遺失這個值，正是這張 issue（#7）要修的那種靜默遺失。
     public var rotation: Int
-    /// 是否沿垂直軸水平翻轉（`p:xfrm` 的 `flipH`）。
+    /// 是否沿垂直軸水平翻轉（`p:xfrm` 的 `flipH`）。同上，PowerPoint 忽略、
+    /// LibreOffice 套用；讀寫本身正確，只是視覺結果因應用程式而異。
     public var flipHorizontal: Bool
-    /// 是否沿水平軸垂直翻轉（`p:xfrm` 的 `flipV`）。
+    /// 是否沿水平軸垂直翻轉（`p:xfrm` 的 `flipV`）。同上。
     public var flipVertical: Bool
     public var table: DrawingTable?
 
