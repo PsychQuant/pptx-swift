@@ -86,6 +86,17 @@ struct PictureRelationshipWriteTests {
         let source = try #require(RealFileTests.fixturePath(file))
         let original = try PptxReader.read(from: source)
 
+        // audio.pptx 含嵌入音訊：PptxWriter 拒絕寫出而不是默默遺失（#5），
+        // 沒有寫出的檔案就沒有 relationship 可驗證。
+        guard !original.slides.contains(where: { $0.containsUnsupportedMedia }) else {
+            let url = TemporaryPPTX.url("rt-\(file)")
+            defer { try? FileManager.default.removeItem(at: url) }
+            #expect(throws: PPTXError.self, "\(file) 含不支援的音訊／影片，寫出應拒絕") {
+                try PptxWriter.write(original, to: url)
+            }
+            return
+        }
+
         try TemporaryPPTX.written(original, "rt") { url in
             let package = try PackageInspector(url)
             defer { package.cleanup() }
