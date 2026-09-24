@@ -73,7 +73,9 @@ public enum PlaceholderType: String {
 
 // MARK: - Shape Geometry
 
-/// 預設幾何形狀
+/// 預設幾何形狀（`a:prstGeom` 的 `prst`，ECMA-376 `ST_ShapeType`）。這個列舉是
+/// 一般形狀（`p:sp`）與連接線（`p:cxnSp`，見 `Connector`）共用的——`ST_ShapeType`
+/// 本身就是同一個列舉同時涵蓋兩者，不是 pptx-swift 自己合併的。
 public enum ShapeGeometry: String {
     case rect
     case ellipse
@@ -90,6 +92,19 @@ public enum ShapeGeometry: String {
     case line
     case custom
     case unknown
+
+    // 連接線專用的預設幾何（PsychQuant/pptx-swift#9）。ECMA-376 `ST_ShapeType`
+    // 定義的連接線子集合，共 9 種，是封閉列舉——PowerPoint 的「連接線」工具只會
+    // 產生這幾種 `prst` 值。
+    case straightConnector1
+    case bentConnector2
+    case bentConnector3
+    case bentConnector4
+    case bentConnector5
+    case curvedConnector2
+    case curvedConnector3
+    case curvedConnector4
+    case curvedConnector5
 }
 
 // MARK: - Position & Size (EMU)
@@ -138,18 +153,45 @@ public enum ShapeFill {
 
 // MARK: - Shape Outline
 
-/// 形狀外框線
+/// 形狀外框線（`a:ln`，ECMA-376 `CT_LineProperties`）
 public struct ShapeOutline {
     public var color: String?    // hex RGB
     public var width: Int?       // EMU
+    /// 線條起點端點樣式（`a:ln/a:headEnd`）。任何形狀的 `a:ln` schema 上都允許，
+    /// 但最常見於連接線（`p:cxnSp`，見 `Connector`）表示箭頭方向。
+    public var headEnd: LineEndStyle?
+    /// 線條終點端點樣式（`a:ln/a:tailEnd`）。
+    public var tailEnd: LineEndStyle?
 
-    public init(color: String? = nil, width: Int? = nil) {
+    public init(color: String? = nil, width: Int? = nil, headEnd: LineEndStyle? = nil, tailEnd: LineEndStyle? = nil) {
         self.color = color
         self.width = width
+        self.headEnd = headEnd
+        self.tailEnd = tailEnd
     }
 
     public var widthPoints: Double? {
         guard let w = width else { return nil }
         return Double(w) / 12700.0
+    }
+}
+
+/// 線條端點樣式（`a:headEnd`／`a:tailEnd`，ECMA-376 `CT_LineEndProperties`）。
+/// 三個屬性都是可選的 enum-like 字串（`ST_LineEndType`／`ST_LineEndWidth`／
+/// `ST_LineEndLength`），pptx-swift 原樣保留字串值、不轉型別化列舉——封閉集合小
+/// 但沒有需要在 Swift 端做邏輯判斷的理由，原樣往返即可。
+public struct LineEndStyle: Equatable {
+    /// `type`（`ST_LineEndType`）：`none`／`triangle`／`stealth`／`diamond`／
+    /// `oval`／`arrow`。
+    public var type: String?
+    /// `w`（`ST_LineEndWidth`）：`sm`／`med`／`lg`。
+    public var width: String?
+    /// `len`（`ST_LineEndLength`）：`sm`／`med`／`lg`。
+    public var length: String?
+
+    public init(type: String? = nil, width: String? = nil, length: String? = nil) {
+        self.type = type
+        self.width = width
+        self.length = length
     }
 }

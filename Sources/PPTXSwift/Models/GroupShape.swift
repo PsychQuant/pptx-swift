@@ -63,6 +63,10 @@ public struct GroupShape {
                 return frame.table?.getText()
             case .group(let group):
                 return group.getText()
+            case .connector:
+                return nil
+            case .raw:
+                return nil
             }
         }
         .filter { !$0.isEmpty }
