@@ -11,6 +11,8 @@ public enum PPTXError: Error, LocalizedError {
     case writeError(String)
     /// ImageIO 無法從資料讀出點陣圖像素尺寸（含 EMF/WMF 等向量 metafile）
     case undecodableImage(String)
+    /// 元素位於群組（GroupShape）內或本身即為群組：父層 transform 會疊加，公分幾何設定不支援
+    case groupGeometryUnsupported(shapeId: Int)
 
     public var errorDescription: String? {
         switch self {
@@ -30,6 +32,8 @@ public enum PPTXError: Error, LocalizedError {
             return "寫入錯誤: \(msg)"
         case .undecodableImage(let msg):
             return "無法解碼圖片: \(msg)"
+        case .groupGeometryUnsupported(let shapeId):
+            return "形狀 id=\(shapeId) 位於群組內或本身即為群組：群組子元素的座標會與父層 transform 疊加，目前不支援設定群組幾何"
         }
     }
 }
