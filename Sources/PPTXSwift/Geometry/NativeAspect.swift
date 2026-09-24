@@ -88,7 +88,7 @@ public extension NativeAspect {
             ? Double(pixelHeight) / Double(pixelWidth)
             : Double(pixelWidth) / Double(pixelHeight)
         let derived = (Double(anchored) * ratio).rounded()
-        guard derived >= 1, derived <= Double(PPTXMetric.coordinateLimitEmu) else {
+        guard derived >= 1, derived <= Double(PPTXMetric.maxCoordinateEmu) else {
             throw PPTXError.invalidParameter(
                 anchor == .width ? "height" : "width",
                 "依原生比例推得的尺寸超出 OOXML 座標範圍（\(derived) EMU）"
