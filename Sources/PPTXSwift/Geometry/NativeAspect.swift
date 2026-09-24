@@ -68,9 +68,10 @@ public extension NativeAspect {
     /// Example: a 1600 × 1200 image anchored at width 3,600,000 EMU (10 cm)
     /// yields height 2,700,000 EMU (7.5 cm).
     ///
-    /// - Throws: `PPTXError.invalidParameter` when the pixel dimensions or the
-    ///   anchored dimension are not positive, or the derived dimension falls
-    ///   outside the OOXML coordinate range.
+    /// - Throws: `PPTXError.invalidParameter` when the pixel dimensions are not
+    ///   positive, or when the anchored dimension (checked before any
+    ///   arithmetic) or the derived dimension lies outside
+    ///   `1 ... PPTXMetric.maxCoordinateEmu`.
     static func fittedSize(
         keeping anchor: AspectAnchor, of size: Size, pixelWidth: Int, pixelHeight: Int
     ) throws -> Size {
@@ -80,8 +81,11 @@ public extension NativeAspect {
             )
         }
         let anchored = anchor == .width ? size.width : size.height
-        guard anchored > 0 else {
-            throw PPTXError.invalidParameter(anchor.rawValue, "錨定邊必須大於 0 EMU（收到 \(anchored)）")
+        guard anchored > 0, anchored <= PPTXMetric.maxCoordinateEmu else {
+            throw PPTXError.invalidParameter(
+                anchor.rawValue,
+                "錨定邊必須介於 1 與 \(PPTXMetric.maxCoordinateEmu) EMU 之間（收到 \(anchored)）"
+            )
         }
 
         let ratio = anchor == .width

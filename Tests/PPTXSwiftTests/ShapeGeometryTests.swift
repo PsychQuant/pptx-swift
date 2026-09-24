@@ -163,6 +163,31 @@ struct ShapeGeometryTests {
         #expect(byHeight.height == 1800000)
     }
 
+    @Test(arguments: [AspectAnchor.width, .height])
+    func `Fitting rejects an anchored side beyond the coordinate limit`(anchor: AspectAnchor) {
+        // limit + 1 with a 2:1 image: the derived side (limit+1)/2 is in range,
+        // so only an anchored-side check can catch this.
+        let beyond = PPTXMetric.maxCoordinateEmu + 1
+        let size = anchor == .width ? Size(width: beyond, height: 1) : Size(width: 1, height: beyond)
+        let pixels = anchor == .width ? (w: 2, h: 1) : (w: 1, h: 2)
+        let error = #expect(throws: PPTXError.self) {
+            _ = try NativeAspect.fittedSize(keeping: anchor, of: size, pixelWidth: pixels.w, pixelHeight: pixels.h)
+        }
+        guard case .invalidParameter(let name, _) = error else {
+            Issue.record("expected .invalidParameter, got \(String(describing: error))")
+            return
+        }
+        #expect(name == anchor.rawValue)
+    }
+
+    @Test func `Fitting at the anchored limit itself is accepted`() throws {
+        let limit = PPTXMetric.maxCoordinateEmu
+        let fitted = try NativeAspect.fittedSize(keeping: .width, of: Size(width: limit, height: 1),
+                                                 pixelWidth: 2, pixelHeight: 1)
+        #expect(fitted.width == limit)
+        #expect(fitted.height == Int((Double(limit) / 2).rounded()))
+    }
+
     @Test func `Fitting with non-positive pixel dimensions is an error`() {
         #expect(throws: PPTXError.self) {
             _ = try NativeAspect.fittedSize(keeping: .width, of: Size(width: 100, height: 100), pixelWidth: 0, pixelHeight: 10)
