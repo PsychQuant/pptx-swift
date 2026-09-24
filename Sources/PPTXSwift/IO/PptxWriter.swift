@@ -7,6 +7,9 @@ public struct PptxWriter {
 
     /// 將 Presentation 寫入 .pptx 檔案
     public static func write(_ presentation: Presentation, to url: URL) throws {
+        // 在建立任何暫存檔之前先擋下寫出去會遺失內容的投影片（#5）：不要默默丟掉。
+        try validateSupportedContent(presentation)
+
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("che-pptx-mcp-write")
             .appendingPathComponent(UUID().uuidString)
@@ -49,6 +52,20 @@ public struct PptxWriter {
 
         // 10. 壓縮為 .pptx
         try ZipHelper.zip(tempDir, to: url)
+    }
+
+    /// 拒絕寫出無法保留其內容的投影片，而不是默默遺失。
+    ///
+    /// - Throws: `PPTXError.writeError` when a slide has embedded or linked
+    ///   audio／video (`a:audioFile`／`a:videoFile`, usually paired with a
+    ///   `p:timing` play trigger): the model does not carry that structure,
+    ///   so writing would silently drop playback (PsychQuant/pptx-swift#5).
+    private static func validateSupportedContent(_ presentation: Presentation) throws {
+        for (index, slide) in presentation.slides.enumerated() where slide.containsUnsupportedMedia {
+            throw PPTXError.writeError(
+                "投影片 \(index + 1) 含音訊或影片（a:audioFile／a:videoFile）：pptx-swift 尚未建模播放觸發與時間軸（p:timing），寫出會遺失播放能力，拒絕存檔"
+            )
+        }
     }
 
     /// 建立新的空白簡報
@@ -321,10 +338,15 @@ public struct PptxWriter {
 
         try xml.write(to: slidesDir.appendingPathComponent("slide\(index + 1).xml"), atomically: true, encoding: .utf8)
 
-        // Slide relationships：slideLayout + 此投影片上每個被引用的 media part 各一個 image relationship
+        // Slide relationships：slideLayout + 此投影片上每個被引用的 media part 各一個 image
+        // relationship，加上每個外部連結圖片（r:link）各一個 TargetMode="External" 的
+        // image relationship（無對應 ppt/media/ part，Target 就是原始連結字串）
         var imageRelsXML = ""
         for entry in imageRels.entries {
             imageRelsXML += "  <Relationship Id=\"\(entry.id)\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"../media/\(escapeXML(entry.partName))\"/>\n"
+        }
+        for entry in imageRels.linkEntries {
+            imageRelsXML += "  <Relationship Id=\"\(entry.id)\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"\(escapeXML(entry.target))\" TargetMode=\"External\"/>\n"
         }
         let slideRels = """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -344,12 +366,54 @@ public struct PptxWriter {
         case .shape(let shape):
             return serializeShape(shape, nextId: &nextId)
         case .picture(let picture):
-            return try serializePicture(picture, embedId: try imageRels.embedId(for: picture), nextId: &nextId)
+            if let embedId = try imageRels.embedId(for: picture) {
+                return try serializePicture(picture, blip: .embed(embedId), nextId: &nextId)
+            }
+            if let target = picture.externalImageTarget, !target.isEmpty {
+                return try serializePicture(picture, blip: .link(imageRels.linkId(for: target)), nextId: &nextId)
+            }
+            return try serializePicture(picture, blip: .none, nextId: &nextId)
         case .graphicFrame(let frame):
             return serializeGraphicFrame(frame, nextId: &nextId)
-        case .group:
-            return ""  // 群組序列化暫不實作
+        case .group(let group):
+            return try serializeGroupShape(group, nextId: &nextId, imageRels: &imageRels)
         }
+    }
+
+    /// 群組（`p:grpSp`）：schema 上與 `p:spTree` 同一個 complex type
+    /// （`CT_GroupShape`），子元素可以是 `p:sp`／`p:pic`／`p:graphicFrame`／`p:grpSp`
+    /// 的任意排列與巢狀深度，因此直接重用 `serializeElement` 遞迴序列化每個子元素；
+    /// `nextId` 與 `imageRels` 用 `inout` 貫穿整棵樹，群組內圖片與投影片其餘部分共用
+    /// 同一份 `slideN.xml.rels`（relationship 是以 part 為範圍，不是以群組為範圍）。
+    private static func serializeGroupShape(
+        _ group: GroupShape, nextId: inout Int, imageRels: inout SlideImageRelationships
+    ) throws -> String {
+        let id = group.id > 0 ? group.id : nextId
+        nextId = max(nextId, id + 1)
+
+        var childXML = ""
+        for element in group.elements {
+            childXML += try serializeElement(element, nextId: &nextId, imageRels: &imageRels)
+        }
+
+        return """
+              <p:grpSp>
+                <p:nvGrpSpPr>
+                  <p:cNvPr id="\(id)" name="\(escapeXML(group.name))"/>
+                  <p:cNvGrpSpPr/>
+                  <p:nvPr/>
+                </p:nvGrpSpPr>
+                <p:grpSpPr>
+                  <a:xfrm>
+                    <a:off x="\(group.position.x)" y="\(group.position.y)"/>
+                    <a:ext cx="\(group.size.width)" cy="\(group.size.height)"/>
+                    <a:chOff x="\(group.childOffset.x)" y="\(group.childOffset.y)"/>
+                    <a:chExt cx="\(group.childExtent.width)" cy="\(group.childExtent.height)"/>
+                  </a:xfrm>
+                </p:grpSpPr>
+        \(childXML)      </p:grpSp>
+
+        """
     }
 
     private static func serializeShape(_ shape: Shape, nextId: inout Int) -> String {
@@ -401,13 +465,25 @@ public struct PptxWriter {
         """
     }
 
-    /// `embedId` is the relationship Id this slide's rels give the picture's
-    /// media part; nil writes `<a:blip/>` with no `r:embed` (a picture with no
-    /// media), never a reference to a relationship that does not exist.
-    private static func serializePicture(_ picture: Picture, embedId: String?, nextId: inout Int) throws -> String {
+    /// Which relationship (if any) a picture's `<a:blip>` carries — the
+    /// relationship Id this slide's rels give the picture's media part
+    /// (`r:embed`), the Id of an external-link relationship (`r:link`), or
+    /// neither. Never a reference to a relationship that does not exist.
+    enum PictureBlipReference {
+        case embed(String)
+        case link(String)
+        case none
+    }
+
+    private static func serializePicture(_ picture: Picture, blip: PictureBlipReference, nextId: inout Int) throws -> String {
         let id = picture.id > 0 ? picture.id : nextId
         nextId = max(nextId, id + 1)
-        let blipXML = embedId.map { "<a:blip r:embed=\"\($0)\"/>" } ?? "<a:blip/>"
+        let blipXML: String
+        switch blip {
+        case .embed(let embedId): blipXML = "<a:blip r:embed=\"\(embedId)\"/>"
+        case .link(let linkId): blipXML = "<a:blip r:link=\"\(linkId)\"/>"
+        case .none: blipXML = "<a:blip/>"
+        }
         // CT_BlipFillProperties order: blip, srcRect, then the fill mode (#2)
         let srcRectXML = try picture.sourceRect.map { try serializeSourceRect($0, pictureId: id) } ?? ""
 
@@ -606,7 +682,15 @@ public struct PptxWriter {
 struct SlideImageRelationships {
     let media: MediaPartPlan
     private(set) var entries: [(id: String, partName: String)] = []
+    /// External-link image relationships (`r:link`, `TargetMode="External"`):
+    /// one per distinct link target, sharing the same Id namespace as
+    /// `entries` so an `r:embed` and an `r:link` on the same slide never
+    /// collide.
+    private(set) var linkEntries: [(id: String, target: String)] = []
     private var idByPartName: [String: String] = [:]
+    private var idByExternalTarget: [String: String] = [:]
+    /// Next Id to allocate, `rId2` upward (`rId1` is the slide layout).
+    private var nextRelId = 2
 
     init(media: MediaPartPlan) {
         self.media = media
@@ -626,9 +710,22 @@ struct SlideImageRelationships {
             )
         }
         if let id = idByPartName[partName] { return id }
-        let id = "rId\(entries.count + 2)"
+        let id = "rId\(nextRelId)"
+        nextRelId += 1
         idByPartName[partName] = id
         entries.append((id, partName))
+        return id
+    }
+
+    /// The relationship Id for an external image link target (`r:link`), one
+    /// per distinct target — pictures linking the same URL share a
+    /// relationship, matching how `embedId(for:)` shares one per media part.
+    mutating func linkId(for target: String) -> String {
+        if let id = idByExternalTarget[target] { return id }
+        let id = "rId\(nextRelId)"
+        nextRelId += 1
+        idByExternalTarget[target] = id
+        linkEntries.append((id, target))
         return id
     }
 }
