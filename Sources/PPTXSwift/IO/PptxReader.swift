@@ -30,6 +30,8 @@ public struct PptxReader {
     }
 
     private static let nsR = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    private static let nsA = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    private static let nsP = "http://schemas.openxmlformats.org/presentationml/2006/main"
 
     // MARK: - Public API
 
@@ -353,17 +355,38 @@ public struct PptxReader {
             slide.transition = parseTransition(transition)
         }
 
-        // 嵌入或連結的音訊／影片：CT_ApplicationNonVisualDrawingProps 的 EG_Media
-        // choice group（ECMA-376 Part 1 §19.3.1.1）有五種，不是只有 audioFile／
-        // videoFile——漏掉任一種都會讓該投影片誤判為「可安全寫出」而默默遺失播放
-        // 內容（Codex R1 HIGH 2）。通常伴隨 p:timing 播放觸發，目前不建模，
-        // PptxWriter 遇到會拒絕寫出（PsychQuant/pptx-swift#5）。
-        let unsupportedMediaLocalNames = ["audioFile", "videoFile", "wavAudioFile", "audioCd", "quickTimeFile"]
-        let unsupportedMediaXPath = unsupportedMediaLocalNames
+        // 嵌入或連結的音訊／影片，涵蓋兩類 pptx-swift 都不建模、寫出時會遺失的來源：
+        //
+        // 1. CT_ApplicationNonVisualDrawingProps 的 EG_Media choice group
+        //    （ECMA-376 Part 1 §19.3.1.1，DrawingML 命名空間）五種都要涵蓋，
+        //    不是只有 audioFile／videoFile（Codex R1 HIGH 2）。
+        // 2. 換場音效與動畫播放音效（`p:transition/p:sndAc/p:stSnd/p:snd`、
+        //    animation 的 play-sound 效果），走 CT_EmbeddedWAVAudioFile 的
+        //    `p:snd`（PresentationML 命名空間），跟 EG_Media 是不同機制
+        //    （Codex R2 HIGH：只查 EG_Media 漏掉這類）。`SlideTransition`
+        //    模型本來就沒有音效欄位，reader／writer 目前完全不解析
+        //    `p:sndAc`，所以這類音效的丟失連偵測都沒有，遑論拒絕。
+        //
+        // 用 local-name() 撈節點後在 Swift 端核對 `.uri`，不靠 XPath 的
+        // namespace-uri()：Foundation 的 XPath 引擎在 attribute node 上已知
+        // 不可靠（PackageInspector.relationshipReferences 的註解），element
+        // node 上沒把握，乾脆兩者都不依賴（Codex R2 MEDIUM——先前版本沒有
+        // namespace 檢查，理論上會被同名但不相干命名空間的擴充元素誤觸發）。
+        let unsupportedMediaElements: [(localName: String, namespace: String)] = [
+            ("audioFile", nsA), ("videoFile", nsA), ("wavAudioFile", nsA),
+            ("audioCd", nsA), ("quickTimeFile", nsA),
+            ("snd", nsP),
+        ]
+        let unsupportedMediaXPath = Set(unsupportedMediaElements.map(\.localName))
             .map { "//*[local-name()='\($0)']" }
             .joined(separator: " | ")
-        let unsupportedMedia = try xml.nodes(forXPath: unsupportedMediaXPath)
-        slide.containsUnsupportedMedia = !unsupportedMedia.isEmpty
+        let expectedNamespace = Dictionary(unsupportedMediaElements.map { ($0.localName, $0.namespace) },
+                                            uniquingKeysWith: { first, _ in first })
+        let candidates = try xml.nodes(forXPath: unsupportedMediaXPath)
+        slide.containsUnsupportedMedia = candidates.contains { node in
+            guard let element = node as? XMLElement, let name = element.localName else { return false }
+            return expectedNamespace[name] == element.uri
+        }
 
         return slide
     }
