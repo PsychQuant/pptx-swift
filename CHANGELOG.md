@@ -30,7 +30,7 @@ Metric geometry slice of PsychQuant/macdoc#90 (Spectra change `pptx-geometry-too
 ### Fixed
 
 - `PptxReader` resolves a picture's `r:embed` relationship by OPC rules. The target is resolved relative to the slide part. A leading `/` means the package root. Targets are percent-decoded, and `.` / `..` segments are normalised. External relationships are ignored. Only an existing regular file directly under `ppt/media/` is accepted.
-- `PptxReader` no longer fails to open a package whose `ppt/media/` contains a subdirectory. Only regular files are read as media.
+- `PptxReader` no longer fails to open a package whose `ppt/media/` contains a subdirectory. Resolving a picture's media and reading `Presentation.images` share one check. A media part must be a regular file: it is tested with `lstat`, so symbolic links, FIFOs, sockets and devices are never followed or opened. Its real path must also lie directly inside the package's own `ppt/media`, and a `ppt` or `ppt/media` that is itself a symbolic link yields no media.
 
 ## [0.1.0] - 2026-04-22
 
