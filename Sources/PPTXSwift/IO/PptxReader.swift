@@ -353,6 +353,13 @@ public struct PptxReader {
             slide.transition = parseTransition(transition)
         }
 
+        // 嵌入或連結的音訊／影片（a:audioFile／a:videoFile，通常伴隨 p:timing 播放觸發）：
+        // 目前不建模，PptxWriter 遇到會拒絕寫出而不是默默遺失（PsychQuant/pptx-swift#5）。
+        let unsupportedMedia = try xml.nodes(
+            forXPath: "//*[local-name()='audioFile'] | //*[local-name()='videoFile']"
+        )
+        slide.containsUnsupportedMedia = !unsupportedMedia.isEmpty
+
         return slide
     }
 
@@ -438,6 +445,15 @@ public struct PptxReader {
             picture.mediaFileName = relationships
                 .first(where: { $0.id == picture.imageRelationshipId })?
                 .mediaFileName
+
+            // r:link：外部連結圖片。只在該 relationship 確實是 TargetMode="External"
+            // 時採用其 Target，避免把內部 relationship 的相對路徑誤當成外部連結。
+            if let linkId = blip.attribute(forLocalName: "link", uri: nsR)?.stringValue
+                ?? blip.attribute(forName: "r:link")?.stringValue,
+               !linkId.isEmpty,
+               let linkRel = relationships.first(where: { $0.id == linkId }), linkRel.isExternal {
+                picture.externalImageTarget = linkRel.target
+            }
         }
 
         // Crop (#2)
@@ -576,6 +592,20 @@ public struct PptxReader {
                 if let ext = try xfrm.nodes(forXPath: "*[local-name()='ext']").first as? XMLElement {
                     group.size.width = Int(ext.attribute(forName: "cx")?.stringValue ?? "0") ?? 0
                     group.size.height = Int(ext.attribute(forName: "cy")?.stringValue ?? "0") ?? 0
+                }
+                // 子座標系（a:chOff / a:chExt）：不存在時視同無縮放，等於群組自己的 off/ext
+                // （與 GroupShape.init 未指定時的預設一致）。
+                if let chOff = try xfrm.nodes(forXPath: "*[local-name()='chOff']").first as? XMLElement {
+                    group.childOffset.x = Int(chOff.attribute(forName: "x")?.stringValue ?? "0") ?? 0
+                    group.childOffset.y = Int(chOff.attribute(forName: "y")?.stringValue ?? "0") ?? 0
+                } else {
+                    group.childOffset = group.position
+                }
+                if let chExt = try xfrm.nodes(forXPath: "*[local-name()='chExt']").first as? XMLElement {
+                    group.childExtent.width = Int(chExt.attribute(forName: "cx")?.stringValue ?? "0") ?? 0
+                    group.childExtent.height = Int(chExt.attribute(forName: "cy")?.stringValue ?? "0") ?? 0
+                } else {
+                    group.childExtent = group.size
                 }
             }
         }

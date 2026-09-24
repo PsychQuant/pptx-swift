@@ -7,17 +7,23 @@ public struct Slide {
     public var transition: SlideTransition?
     public var layoutReference: String?     // slideLayout 的 rId
     public var masterReference: String?     // slideMaster 的 rId
+    /// 投影片 XML 含 `a:audioFile` 或 `a:videoFile`（嵌入或連結的音訊／影片）。
+    /// pptx-swift 目前不建模播放觸發與時間軸（`p:timing`），`PptxWriter` 遇到這種
+    /// 投影片會拒絕寫出（見 PsychQuant/pptx-swift#5），不要默默遺失內容。
+    public var containsUnsupportedMedia: Bool
 
     public init(
         elements: [SlideElement] = [],
         notes: String? = nil,
         transition: SlideTransition? = nil,
-        layoutReference: String? = nil
+        layoutReference: String? = nil,
+        containsUnsupportedMedia: Bool = false
     ) {
         self.elements = elements
         self.notes = notes
         self.transition = transition
         self.layoutReference = layoutReference
+        self.containsUnsupportedMedia = containsUnsupportedMedia
     }
 
     /// 取得投影片純文字
