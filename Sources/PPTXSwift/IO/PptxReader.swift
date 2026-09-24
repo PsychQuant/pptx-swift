@@ -33,6 +33,17 @@ public struct PptxReader {
     private static let nsA = "http://schemas.openxmlformats.org/drawingml/2006/main"
     private static let nsP = "http://schemas.openxmlformats.org/presentationml/2006/main"
 
+    /// An `xsd:boolean` attribute value. The lexical space is `{true, false,
+    /// 1, 0}` (case-sensitive); accepting both spellings here is slightly
+    /// more permissive than the XSD requires, on the theory that a reader
+    /// should never reject a file over which of the two equally-valid forms
+    /// a producer chose to emit — `PptxWriter` itself always emits `"1"`.
+    /// Anything else (including an absent attribute) is `false`, matching
+    /// the schema default for `flipH`／`flipV`.
+    static func parseXSDBoolean(_ value: String?) -> Bool {
+        value == "1" || value == "true"
+    }
+
     // MARK: - Public API
 
     /// 讀取 .pptx 檔案並解析為 Presentation
@@ -441,6 +452,7 @@ public struct PptxReader {
         // Shape properties (position, size, geometry)
         if let spPr = try element.nodes(forXPath: "./*[local-name()='spPr']").first as? XMLElement {
             parseShapeProperties(spPr, position: &shape.position, size: &shape.size,
+                               rotation: &shape.rotation, flipHorizontal: &shape.flipHorizontal, flipVertical: &shape.flipVertical,
                                fill: &shape.fill, outline: &shape.outline, geometry: &shape.geometry)
         }
 
@@ -493,6 +505,7 @@ public struct PptxReader {
             var outline: ShapeOutline? = nil
             var geometry: ShapeGeometry = .rect
             parseShapeProperties(spPr, position: &picture.position, size: &picture.size,
+                               rotation: &picture.rotation, flipHorizontal: &picture.flipHorizontal, flipVertical: &picture.flipVertical,
                                fill: &fill, outline: &outline, geometry: &geometry)
         }
 
@@ -543,7 +556,8 @@ public struct PptxReader {
             frame.name = cNvPr.attribute(forName: "name")?.stringValue ?? ""
         }
 
-        // Position and size from xfrm
+        // Position and size from xfrm (`p:xfrm`, same `a:CT_Transform2D` type
+        // as a shape's `a:xfrm` — see the doc comment on `GraphicFrame.rotation`)
         if let xfrm = try element.nodes(forXPath: ".//*[local-name()='xfrm']").first as? XMLElement {
             if let off = try xfrm.nodes(forXPath: "*[local-name()='off']").first as? XMLElement {
                 frame.position.x = Int(off.attribute(forName: "x")?.stringValue ?? "0") ?? 0
@@ -553,6 +567,9 @@ public struct PptxReader {
                 frame.size.width = Int(ext.attribute(forName: "cx")?.stringValue ?? "0") ?? 0
                 frame.size.height = Int(ext.attribute(forName: "cy")?.stringValue ?? "0") ?? 0
             }
+            frame.rotation = Int(xfrm.attribute(forName: "rot")?.stringValue ?? "0") ?? 0
+            frame.flipHorizontal = parseXSDBoolean(xfrm.attribute(forName: "flipH")?.stringValue)
+            frame.flipVertical = parseXSDBoolean(xfrm.attribute(forName: "flipV")?.stringValue)
         }
 
         // Table
@@ -635,6 +652,9 @@ public struct PptxReader {
                 } else {
                     group.childExtent = group.size
                 }
+                group.rotation = Int(xfrm.attribute(forName: "rot")?.stringValue ?? "0") ?? 0
+                group.flipHorizontal = parseXSDBoolean(xfrm.attribute(forName: "flipH")?.stringValue)
+                group.flipVertical = parseXSDBoolean(xfrm.attribute(forName: "flipV")?.stringValue)
             }
         }
 
@@ -665,6 +685,9 @@ public struct PptxReader {
         _ spPr: XMLElement,
         position: inout Position,
         size: inout Size,
+        rotation: inout Int,
+        flipHorizontal: inout Bool,
+        flipVertical: inout Bool,
         fill: inout ShapeFill?,
         outline: inout ShapeOutline?,
         geometry: inout ShapeGeometry
@@ -679,6 +702,13 @@ public struct PptxReader {
                 size.width = Int(ext.attribute(forName: "cx")?.stringValue ?? "0") ?? 0
                 size.height = Int(ext.attribute(forName: "cy")?.stringValue ?? "0") ?? 0
             }
+            // rot／flipH／flipV (ECMA-376 Part 1 §20.1.7.6, CT_Transform2D):
+            // attributes of the xfrm element itself, not child elements.
+            // `rot` is accepted as-is (ST_Angle is an unrestricted xsd:int);
+            // out-of-canonical-range values are only normalized on write.
+            rotation = Int(xfrm.attribute(forName: "rot")?.stringValue ?? "0") ?? 0
+            flipHorizontal = parseXSDBoolean(xfrm.attribute(forName: "flipH")?.stringValue)
+            flipVertical = parseXSDBoolean(xfrm.attribute(forName: "flipV")?.stringValue)
         }
 
         // Geometry
