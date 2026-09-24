@@ -93,8 +93,16 @@ struct UnmodeledElementTests {
 
             let slideXML = try package.xml("ppt/slides/slide1.xml")
             let avLst = try #require(try slideXML.nodes(forXPath: "//*[local-name()='cxnSp']//*[local-name()='avLst']").first as? XMLElement)
-            let gds = try avLst.nodes(forXPath: "*[local-name()='gd']")
-            #expect(gds.count == 2)
+            let gds = try avLst.nodes(forXPath: "*[local-name()='gd']").compactMap { $0 as? XMLElement }
+            // Asserted directly on the written XML, independent of
+            // `PptxReader` — Codex round 2 noted the original version only
+            // checked `gds.count`, then verified `name`/`fmla` solely via a
+            // round trip through the reader, which could not tell a writer
+            // bug from a matching reader bug (the same blind spot the model
+            // this project follows for other fields, e.g.
+            // `PackageInspector`-based assertions elsewhere in this file).
+            #expect(gds.map { $0.attribute(forName: "name")?.stringValue } == ["adj1", "adj2"])
+            #expect(gds.map { $0.attribute(forName: "fmla")?.stringValue } == ["val 25000", "val 75000"])
 
             let reread = try PptxReader.read(from: url)
             let connector = try #require(reread.slides[0].elements.compactMap { element -> Connector? in
@@ -105,6 +113,26 @@ struct UnmodeledElementTests {
                 GeometryAdjustment(name: "adj1", formula: "val 25000"),
                 GeometryAdjustment(name: "adj2", formula: "val 75000"),
             ])
+        }
+    }
+
+    // MARK: - Scenario: a connector with no adjustments keeps the exact pre-#9 empty avLst
+
+    /// Codex round 2: the claim that an empty `adjustments` array reproduces
+    /// the pre-fix literal `<a:avLst/>` byte-for-byte was evident from the
+    /// interpolation change but never asserted directly. Locks it in, the
+    /// same way `XfrmRotationFlipTests`' "byte identical" test locks in
+    /// omitted default attributes elsewhere in this codebase.
+    @Test func `A connector with no adjustments writes the exact literal empty avLst tag`() throws {
+        var pres = PptxWriter.createNew()
+        pres.slides[0].elements = [.connector(Connector(id: 2, name: "c"))]
+
+        try TemporaryPPTX.written(pres) { url in
+            let package = try PackageInspector(url)
+            defer { package.cleanup() }
+            let slideText = try #require(String(data: try Data(contentsOf: package.root.appendingPathComponent("ppt/slides/slide1.xml")), encoding: .utf8))
+            #expect(slideText.contains("<a:avLst/>"))
+            #expect(!slideText.contains("<a:gd "))
         }
     }
 
@@ -347,6 +375,33 @@ struct UnmodeledElementTests {
                 "the descendant's own closer re-declaration must survive untouched")
     }
 
+    // MARK: - Scenario: an inherited, unprefixed default namespace is also repaired
+
+    /// Codex round 1 HIGH also named the unprefixed default namespace as a
+    /// class of dependency the old scan-based design dropped entirely; round
+    /// 2 noted no test exercised it directly. The captured root and its
+    /// child are both unprefixed (no local `xmlns=` of their own anywhere in
+    /// the raw content) and rely entirely on the ambient default namespace
+    /// declared only on the outer `<p:sld>`.
+    @Test func `An inherited unprefixed default namespace is also repaired`() throws {
+        var pres = PptxWriter.createNew()
+        pres.slides[0].elements = [.shape(Shape(id: 2, name: "s"))]
+
+        let raw = "<widget><item/></widget>"
+        let url = try Self.writtenWithRawContentSpliced(pres, rawXML: raw, extraNamespaceDecl: "xmlns=\"urn:defaultns\"", label: "default-ns")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let reread = try PptxReader.read(from: url)
+        let rawElement = try #require(reread.slides[0].elements.compactMap { element -> RawSlideElement? in
+            if case .raw(let r) = element { return r }
+            return nil
+        }.first)
+        #expect(rawElement.localName == "widget")
+        let fragmentRoot = try #require(try XMLDocument(xmlString: rawElement.xml).rootElement())
+        #expect(fragmentRoot.namespaces?.first { $0.name == "" }?.stringValue == "urn:defaultns",
+                "the unprefixed default namespace inherited from the outer slide must also be repaired onto the fragment root")
+    }
+
     // MARK: - Scenario: id collision avoidance sees ids inside raw content
 
     @Test func `Slide allElementIds and GroupShape containsElement see ids inside raw content`() throws {
@@ -363,6 +418,12 @@ struct UnmodeledElementTests {
 
         #expect(slide.allElementIds.sorted() == [2, 10, 11, 50, 51, 60])
         #expect(slide.locateElement(id: 50) == .topLevel(index: 1))
+        // The raw element's *second* id, not just its first — Codex round 2
+        // noted the original assertion here only ever exercised id 50, which
+        // would not have caught the `elementId`-only bug round 1 introduced
+        // (fixed before round 1's own review completed, but the test itself
+        // was never strengthened to cover it explicitly until now).
+        #expect(slide.locateElement(id: 51) == .topLevel(index: 1))
         #expect(slide.locateElement(id: 60) == .groupChild(groupId: 10))
         #expect(slide.locateElement(id: 999) == .notFound)
 
