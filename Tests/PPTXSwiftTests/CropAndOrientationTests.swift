@@ -78,7 +78,7 @@ struct CropAndOrientationTests {
             switch element {
             case .picture(let picture): return [picture]
             case .group(let group): return allPictures(in: group.elements)
-            case .shape, .graphicFrame: return []
+            case .shape, .graphicFrame, .connector, .raw: return []
             }
         }
     }
