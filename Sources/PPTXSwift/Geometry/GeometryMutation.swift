@@ -3,43 +3,26 @@ import Foundation
 // MARK: - Validated cm → EMU geometry
 
 public extension PPTXMetric {
-    /// Largest magnitude an OOXML coordinate may take, in EMU
-    /// (`ST_Coordinate` / `ST_PositiveCoordinate` upper bound, ECMA-376 §20.1.10).
-    static let coordinateLimitEmu = 27_273_042_316_900
-
     /// Validates a centimeter rectangle and converts it to an EMU offset / extent.
     ///
     /// - Throws: `PPTXError.invalidParameter` when any value is non-finite or
-    ///   outside the OOXML coordinate range, or when width / height is not
-    ///   strictly positive. Validation happens before any conversion, so an
-    ///   invalid input can never trap on `Int` conversion.
+    ///   outside `coordinateRangeEmu`, or when width / height is not strictly
+    ///   positive (also after rounding to whole EMU). Never traps.
     static func geometry(
         xCm: Double, yCm: Double, widthCm: Double, heightCm: Double
     ) throws -> (position: Position, size: Size) {
-        try checkRange(xCm, name: "xCm")
-        try checkRange(yCm, name: "yCm")
-        try checkRange(widthCm, name: "widthCm")
-        try checkRange(heightCm, name: "heightCm")
+        let position = try Position(xCm: xCm, yCm: yCm)
+        let size = try Size(widthCm: widthCm, heightCm: heightCm)
         guard widthCm > 0 else {
             throw PPTXError.invalidParameter("widthCm", "必須大於 0（收到 \(widthCm)）")
         }
         guard heightCm > 0 else {
             throw PPTXError.invalidParameter("heightCm", "必須大於 0（收到 \(heightCm)）")
         }
-        let size = Size(widthCm: widthCm, heightCm: heightCm)
         guard size.width > 0, size.height > 0 else {
             throw PPTXError.invalidParameter("widthCm/heightCm", "換算後小於 1 EMU（收到 \(widthCm) × \(heightCm) cm）")
         }
-        return (Position(xCm: xCm, yCm: yCm), size)
-    }
-
-    private static func checkRange(_ cm: Double, name: String) throws {
-        guard cm.isFinite else {
-            throw PPTXError.invalidParameter(name, "必須是有限數值（收到 \(cm)）")
-        }
-        guard abs(cm * 360_000) <= Double(coordinateLimitEmu) else {
-            throw PPTXError.invalidParameter(name, "超出 OOXML 座標範圍（收到 \(cm) cm）")
-        }
+        return (position, size)
     }
 }
 

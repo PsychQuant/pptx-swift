@@ -12,10 +12,10 @@ final class MetricGeometryTests: XCTestCase {
 
     func testWorkedConversionsCmToEmu() {
         // 1 cm = exactly 360_000 EMU.
-        XCTAssertEqual(PPTXMetric.emu(fromCm: 2.0), 720000)
-        XCTAssertEqual(PPTXMetric.emu(fromCm: 3.0), 1080000)
-        XCTAssertEqual(PPTXMetric.emu(fromCm: 10.0), 3600000)
-        XCTAssertEqual(PPTXMetric.emu(fromCm: 2.54), 914400)
+        XCTAssertEqual(try PPTXMetric.emu(fromCm: 2.0), 720000)
+        XCTAssertEqual(try PPTXMetric.emu(fromCm: 3.0), 1080000)
+        XCTAssertEqual(try PPTXMetric.emu(fromCm: 10.0), 3600000)
+        XCTAssertEqual(try PPTXMetric.emu(fromCm: 2.54), 914400)
     }
 
     func testWorkedConversionsEmuToCm() {
@@ -25,9 +25,9 @@ final class MetricGeometryTests: XCTestCase {
 
     // MARK: - Round-trip stability (spec Scenario: Round-trip stability)
 
-    func testRoundTripStability() {
+    func testRoundTripStability() throws {
         for x in [0.0, 0.01, 2.54, 33.33, 100.0] {
-            let recovered = PPTXMetric.cm(fromEmu: PPTXMetric.emu(fromCm: x))
+            let recovered = PPTXMetric.cm(fromEmu: try PPTXMetric.emu(fromCm: x))
             XCTAssertLessThan(abs(recovered - x), 0.0001,
                               "round-trip for \(x) cm drifted to \(recovered)")
         }
@@ -43,14 +43,14 @@ final class MetricGeometryTests: XCTestCase {
 
     // MARK: - Centimeter-denominated construction (spec Scenario)
 
-    func testPositionCmConstruction() {
-        let pos = Position(xCm: 2.0, yCm: 3.0)
+    func testPositionCmConstruction() throws {
+        let pos = try Position(xCm: 2.0, yCm: 3.0)
         XCTAssertEqual(pos.x, 720000)
         XCTAssertEqual(pos.y, 1080000)
     }
 
-    func testSizeCmConstruction() {
-        let size = Size(widthCm: 10.0, heightCm: 7.5)
+    func testSizeCmConstruction() throws {
+        let size = try Size(widthCm: 10.0, heightCm: 7.5)
         XCTAssertEqual(size.width, 3600000)
         XCTAssertEqual(size.height, 2700000)
     }
