@@ -265,7 +265,7 @@ public struct PptxReader {
                 let shape = try parseShape(element)
                 elements.append(.shape(shape))
             case "pic":
-                let picture = try parsePicture(element)
+                let picture = try parsePicture(element, relationships: relationships)
                 elements.append(.picture(picture))
             case "graphicFrame":
                 let frame = try parseGraphicFrame(element)
@@ -314,7 +314,7 @@ public struct PptxReader {
 
     // MARK: - Picture
 
-    private static func parsePicture(_ element: XMLElement) throws -> Picture {
+    private static func parsePicture(_ element: XMLElement, relationships: [Rel]) throws -> Picture {
         var picture = Picture()
 
         if let cNvPr = try element.nodes(forXPath: ".//*[local-name()='cNvPr']").first as? XMLElement {
@@ -329,6 +329,10 @@ public struct PptxReader {
             picture.imageRelationshipId = blip.attribute(forLocalName: "embed", uri: nsR)?.stringValue
                 ?? blip.attribute(forName: "r:embed")?.stringValue
                 ?? ""
+            // r:embed → ppt/media/ 檔名（target 形如 "../media/image1.png"）
+            if let rel = relationships.first(where: { $0.id == picture.imageRelationshipId && $0.isImage }) {
+                picture.mediaFileName = (rel.target as NSString).lastPathComponent
+            }
         }
 
         // Position and size
@@ -442,7 +446,7 @@ public struct PptxReader {
             case "sp":
                 group.elements.append(.shape(try parseShape(childElement)))
             case "pic":
-                group.elements.append(.picture(try parsePicture(childElement)))
+                group.elements.append(.picture(try parsePicture(childElement, relationships: relationships)))
             case "graphicFrame":
                 group.elements.append(.graphicFrame(try parseGraphicFrame(childElement)))
             case "grpSp":
