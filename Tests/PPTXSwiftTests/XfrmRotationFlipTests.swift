@@ -85,14 +85,30 @@ struct XfrmRotationFlipTests {
 
     // MARK: - Scenario: a rotated nested group
 
-    @Test func `A rotated nested group preserves rotation at every depth`() throws {
+    /// The outer and inner groups both carry a non-trivial `chOff`／`chExt`
+    /// (different from their own `off`／`ext`, i.e. a real child-coordinate
+    /// scale + translate — the same shape `GroupShapeWriteTests`'s first
+    /// scenario uses), on top of rotation／flip. `rot`／`flipH`／`flipV` live
+    /// on the group's own `a:xfrm` as attributes, entirely separate from the
+    /// `chOff`／`chExt` child elements that scale/translate — this test
+    /// proves the two do not interfere with each other when both are
+    /// non-trivial at once (Codex review round 1, MEDIUM: the first version
+    /// left every group at its degenerate all-zero default geometry, so it
+    /// could not have caught the two features clobbering one another).
+    @Test func `A rotated nested group preserves rotation alongside non trivial child coordinate scaling`() throws {
         var pres = PptxWriter.createNew()
         pres.slides[0].elements = [
             .group(GroupShape(
-                id: 10, name: "Outer", rotation: Self.degrees(12),
+                id: 10, name: "Outer",
+                position: Position(x: 914400, y: 914400), size: Size(width: 1828800, height: 1828800),
+                childOffset: Position(x: 0, y: 0), childExtent: Size(width: 3657600, height: 3657600),
+                rotation: Self.degrees(12),
                 elements: [
                     .group(GroupShape(
-                        id: 11, name: "Inner", rotation: Self.degrees(313), flipHorizontal: true,
+                        id: 11, name: "Inner",
+                        position: Position(x: 500000, y: 500000), size: Size(width: 1000000, height: 1000000),
+                        childOffset: Position(x: -200000, y: -200000), childExtent: Size(width: 500000, height: 500000),
+                        rotation: Self.degrees(313), flipHorizontal: true,
                         elements: [
                             .shape(Shape(id: 12, name: "Deep shape", rotation: Self.degrees(90), flipVertical: true)),
                         ]
@@ -113,6 +129,10 @@ struct XfrmRotationFlipTests {
             })
             #expect(outer.rotation == Self.degrees(12))
             #expect(outer.flipHorizontal == false)
+            #expect(outer.position.x == 914400 && outer.position.y == 914400)
+            #expect(outer.size.width == 1828800 && outer.size.height == 1828800)
+            #expect(outer.childOffset.x == 0 && outer.childOffset.y == 0)
+            #expect(outer.childExtent.width == 3657600 && outer.childExtent.height == 3657600)
 
             let inner = try #require(outer.elements.first.flatMap { element -> GroupShape? in
                 if case .group(let g) = element { return g }
@@ -121,6 +141,10 @@ struct XfrmRotationFlipTests {
             #expect(inner.rotation == Self.degrees(313))
             #expect(inner.flipHorizontal == true)
             #expect(inner.flipVertical == false)
+            #expect(inner.position.x == 500000 && inner.position.y == 500000)
+            #expect(inner.size.width == 1000000 && inner.size.height == 1000000)
+            #expect(inner.childOffset.x == -200000 && inner.childOffset.y == -200000)
+            #expect(inner.childExtent.width == 500000 && inner.childExtent.height == 500000)
 
             let deep = try #require(inner.elements.first.flatMap { element -> Shape? in
                 if case .shape(let s) = element { return s }
@@ -205,6 +229,42 @@ struct XfrmRotationFlipTests {
             let shape = try #require(reread.slides[0].shapes.first)
             #expect(shape.rotation == expectedNormalized)
         }
+    }
+
+    // MARK: - Scenario: the reader alone preserves an out-of-canonical-range rotation
+
+    /// The test above writes a raw value and reads the *normalized* result
+    /// back — it cannot distinguish a reader that itself normalizes on the
+    /// way in from one that doesn't, because `PptxWriter` never emits a raw
+    /// value in the first place (Codex review round 1, MEDIUM). This test
+    /// patches the on-disk XML directly, bypassing the writer entirely, so
+    /// it exercises only `PptxReader`'s "accept `ST_Angle` as-is" contract.
+    @Test func `The reader preserves a raw out of canonical range rot value exactly, never normalizing on the way in`() throws {
+        var pres = PptxWriter.createNew()
+        pres.slides[0].elements = [.shape(Shape(id: 2, name: "s"))]
+        let url = TemporaryPPTX.url("raw-rot")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try PptxWriter.write(pres, to: url)
+
+        let unpacked = try ZipHelper.unzip(url)
+        defer { ZipHelper.cleanup(unpacked) }
+        let slidePath = unpacked.appendingPathComponent("ppt/slides/slide1.xml")
+        let original = try String(contentsOf: slidePath, encoding: .utf8)
+        // -30°, outside [0, fullTurn) — never a value PptxWriter itself would
+        // emit (it always normalizes before writing), so seeing it survive a
+        // read proves the reader itself does not normalize.
+        let rawRotation = -1_800_000
+        let patched = original.replacingOccurrences(of: "<a:xfrm>", with: "<a:xfrm rot=\"\(rawRotation)\">")
+        try #require(patched != original, "fixture assumption: the shape's <a:xfrm> opening tag must be patchable")
+        try patched.write(to: slidePath, atomically: true, encoding: .utf8)
+
+        let patchedURL = TemporaryPPTX.url("raw-rot-patched")
+        defer { try? FileManager.default.removeItem(at: patchedURL) }
+        try ZipHelper.zip(unpacked, to: patchedURL)
+
+        let reread = try PptxReader.read(from: patchedURL)
+        let shape = try #require(reread.slides[0].shapes.first)
+        #expect(shape.rotation == rawRotation, "the reader must hand back the raw ST_Angle value untouched")
     }
 
     // MARK: - Scenario: unrotated, unflipped elements produce byte-identical `xfrm` opening tags
