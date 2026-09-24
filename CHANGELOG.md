@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-24
+
 ### Fixed
 
 - `PptxWriter` writes group shapes (#5). A `p:grpSp` used to serialize as nothing, so saving a presentation that contained a group silently dropped the group and every shape, picture and text box inside it. Groups now round-trip with nesting at any depth and their transform (`a:off` / `a:ext` / `a:chOff` / `a:chExt`). Pictures inside a group get image relationships from the same per-slide allocation as top-level pictures (one relationship per distinct media part; no duplicate or dangling `rId`).
