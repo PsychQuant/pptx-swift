@@ -94,6 +94,10 @@ struct CropAndOrientationTests {
         ("abc", nil),
         ("", nil),
         ("1e400%", nil),
+        ("1e2%", nil),             // exponent notation is not the ST_Percentage lexical form
+        ("2.5e-1%", nil),
+        ("%", nil),
+        ("12.5", nil),             // a decimal needs the % suffix
         ("99999999999999999999", nil),
     ]
 

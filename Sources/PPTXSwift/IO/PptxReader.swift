@@ -469,14 +469,17 @@ public struct PptxReader {
 
     /// An `ST_Percentage` value in thousandths of a percent. Accepts both
     /// forms the schemas allow: the transitional integer (`"52941"`) and the
-    /// strict percent string (`"52.941%"`, rounded to the nearest
-    /// thousandth). Returns nil for anything else, including values outside
-    /// the 32-bit range `xsd:int` allows.
+    /// strict percent string, a plain decimal followed by `%` (`"52.941%"`,
+    /// rounded to the nearest thousandth). Returns nil for anything else —
+    /// exponent notation (`"1e2%"`) included — and for values outside the
+    /// 32-bit range `xsd:int` allows.
     static func parsePercentage(_ text: String) -> Int? {
         let trimmed = text.trimmingCharacters(in: .whitespaces)
         let value: Double
         if trimmed.hasSuffix("%") {
-            guard let percent = Double(trimmed.dropLast()), percent.isFinite else { return nil }
+            let number = trimmed.dropLast()
+            guard number.range(of: #"^[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)$"#, options: .regularExpression) != nil,
+                  let percent = Double(number), percent.isFinite else { return nil }
             value = (percent * 1000).rounded()
         } else {
             guard let integer = Int(trimmed) else { return nil }
