@@ -20,11 +20,18 @@ public struct MediaFile {
     public var id: String           // 檔案名稱或 relationship ID
     public var fileName: String     // e.g. "image1.png"
     public var data: Data
+    /// The content type the source package's `[Content_Types].xml` declared
+    /// for this part (its `Override`, else the `Default` for its extension),
+    /// as read by `PptxReader`; nil for media created in memory. The writer
+    /// uses it when ImageIO cannot identify the bytes (EMF, WMF, SVG, …),
+    /// ahead of the extension table.
+    public var packageContentType: String?
 
-    public init(id: String, fileName: String, data: Data) {
+    public init(id: String, fileName: String, data: Data, packageContentType: String? = nil) {
         self.id = id
         self.fileName = fileName
         self.data = data
+        self.packageContentType = packageContentType
     }
 
     public var fileExtension: String {

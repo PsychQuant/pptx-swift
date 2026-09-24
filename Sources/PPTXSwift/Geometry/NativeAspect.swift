@@ -136,12 +136,26 @@ public extension NativeAspect {
     /// fraction (`PictureSourceRect.visibleWidthFraction` /
     /// `visibleHeightFraction`). A nil crop is the whole image.
     ///
-    /// - Throws: `PPTXError.invalidParameter` (parameter `srcRect`) when the
-    ///   crop leaves a width or height that is zero or negative.
+    /// - Throws: `PPTXError.invalidParameter` with parameter
+    ///   `pixelDimensions` when a pixel dimension is not positive, or with
+    ///   parameter `srcRect` when an edge does not fit `xsd:int`
+    ///   (`PictureSourceRect.isRepresentable`) or the crop leaves a width or
+    ///   height that is zero or negative.
     static func visibleDimensions(
         pixelWidth: Int, pixelHeight: Int, crop: PictureSourceRect?
     ) throws -> (width: Double, height: Double) {
+        guard pixelWidth > 0, pixelHeight > 0 else {
+            throw PPTXError.invalidParameter(
+                "pixelDimensions", "像素尺寸必須大於 0（收到 \(pixelWidth) × \(pixelHeight)）"
+            )
+        }
         guard let crop else { return (Double(pixelWidth), Double(pixelHeight)) }
+        guard crop.isRepresentable else {
+            throw PPTXError.invalidParameter(
+                "srcRect",
+                "裁切值超出 32 位元整數範圍（l=\(crop.left) t=\(crop.top) r=\(crop.right) b=\(crop.bottom)）"
+            )
+        }
         let widthFraction = crop.visibleWidthFraction
         let heightFraction = crop.visibleHeightFraction
         guard widthFraction > 0, heightFraction > 0 else {
