@@ -11,6 +11,8 @@ public struct Picture {
     /// r:embed 所指 media part 的檔名（ppt/media/ 下，例 "image1.png"）；
     /// 讀檔時由投影片 relationships 解析，無法解析時為 nil
     public var mediaFileName: String?
+    /// `<a:srcRect>` of the picture's `blipFill` (crop); nil when absent.
+    public var sourceRect: PictureSourceRect?
 
     public init(
         id: Int = 0,
@@ -19,7 +21,8 @@ public struct Picture {
         position: Position = Position(),
         size: Size = Size(),
         imageRelationshipId: String = "",
-        mediaFileName: String? = nil
+        mediaFileName: String? = nil,
+        sourceRect: PictureSourceRect? = nil
     ) {
         self.id = id
         self.name = name
@@ -28,5 +31,43 @@ public struct Picture {
         self.size = size
         self.imageRelationshipId = imageRelationshipId
         self.mediaFileName = mediaFileName
+        self.sourceRect = sourceRect
+    }
+}
+
+/// The crop of a picture: its `blipFill`'s `<a:srcRect>` (ECMA-376 Part 1,
+/// §20.1.8.55, `CT_RelativeRect`).
+///
+/// Each edge is how far that side of the image is moved inward, in
+/// thousandths of a percent of the image's width (`left`, `right`) or height
+/// (`top`, `bottom`): `100_000` is 100 %, `25_000` crops a quarter off that
+/// side. A negative value moves the edge outward, adding empty space. The
+/// visible part — what `a:stretch` fills the picture's frame with — is
+/// `1 − (left + right) / 100_000` of the width and
+/// `1 − (top + bottom) / 100_000` of the height.
+public struct PictureSourceRect: Equatable {
+    /// Scale of every edge: 100,000 = 100 %.
+    public static let fullScale = 100_000
+
+    public var left: Int
+    public var top: Int
+    public var right: Int
+    public var bottom: Int
+
+    public init(left: Int = 0, top: Int = 0, right: Int = 0, bottom: Int = 0) {
+        self.left = left
+        self.top = top
+        self.right = right
+        self.bottom = bottom
+    }
+
+    /// Fraction of the image's width left visible (> 1 when extended).
+    public var visibleWidthFraction: Double {
+        1 - (Double(left) + Double(right)) / Double(Self.fullScale)
+    }
+
+    /// Fraction of the image's height left visible (> 1 when extended).
+    public var visibleHeightFraction: Double {
+        1 - (Double(top) + Double(bottom)) / Double(Self.fullScale)
     }
 }

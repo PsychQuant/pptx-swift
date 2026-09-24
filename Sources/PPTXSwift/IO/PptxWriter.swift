@@ -408,6 +408,8 @@ public struct PptxWriter {
         let id = picture.id > 0 ? picture.id : nextId
         nextId = max(nextId, id + 1)
         let blipXML = embedId.map { "<a:blip r:embed=\"\($0)\"/>" } ?? "<a:blip/>"
+        // CT_BlipFillProperties order: blip, srcRect, then the fill mode (#2)
+        let srcRectXML = picture.sourceRect.map(serializeSourceRect) ?? ""
 
         return """
               <p:pic>
@@ -417,7 +419,7 @@ public struct PptxWriter {
                   <p:nvPr/>
                 </p:nvPicPr>
                 <p:blipFill>
-                  \(blipXML)
+                  \(blipXML)\(srcRectXML)
                   <a:stretch><a:fillRect/></a:stretch>
                 </p:blipFill>
                 <p:spPr>
@@ -430,6 +432,13 @@ public struct PptxWriter {
               </p:pic>
 
         """
+    }
+
+    /// `<a:srcRect>` with only the non-zero edges (0 is the schema default).
+    private static func serializeSourceRect(_ rect: PictureSourceRect) -> String {
+        let edges = [("l", rect.left), ("t", rect.top), ("r", rect.right), ("b", rect.bottom)]
+        let attributes = edges.filter { $0.1 != 0 }.map { " \($0.0)=\"\($0.1)\"" }.joined()
+        return "<a:srcRect\(attributes)/>"
     }
 
     private static func serializeGraphicFrame(_ frame: GraphicFrame, nextId: inout Int) -> String {
