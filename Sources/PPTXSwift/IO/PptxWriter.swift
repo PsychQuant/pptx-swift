@@ -699,7 +699,7 @@ public struct PptxWriter {
             rowsXML += "          <a:tr h=\"\(row.height)\">\n"
             for cell in row.cells {
                 rowsXML += "            <a:tc>\n"
-                rowsXML += "              \(serializeTextBody(cell.textBody))\n"
+                rowsXML += "              \(serializeTextBody(cell.textBody, wrappingElement: "a:txBody"))\n"
                 rowsXML += "              <a:tcPr/>\n"
                 rowsXML += "            </a:tc>\n"
             }
@@ -734,7 +734,16 @@ public struct PptxWriter {
         """
     }
 
-    private static func serializeTextBody(_ textBody: TextBody) -> String {
+    /// `wrappingElement` defaults to `p:txBody` (`CT_Shape`'s own type, used
+    /// by `p:sp`/`p:pic`). A table cell (`a:tc`, `CT_TableCell`) needs
+    /// `a:txBody` instead — the *same* DrawingML `CT_TextBody` structure
+    /// (`a:bodyPr`/`a:lstStyle`/`a:p`…) either way, only the wrapping
+    /// element's own namespace differs (PsychQuant/pptx-swift#10: writing
+    /// `p:txBody` here was a namespace error ECMA-376 does not permit for
+    /// `CT_TableCell`, discovered because LibreOffice's stricter importer
+    /// silently stopped rendering everything in the shape tree from that
+    /// table onward once it hit the mistagged element).
+    private static func serializeTextBody(_ textBody: TextBody, wrappingElement: String = "p:txBody") -> String {
         var paragraphsXML = ""
         for para in textBody.paragraphs {
             var pPrXML = ""
@@ -776,7 +785,7 @@ public struct PptxWriter {
             paragraphsXML = "<a:p><a:endParaRPr lang=\"en-US\"/></a:p>"
         }
 
-        return "<p:txBody><a:bodyPr/><a:lstStyle/>\(paragraphsXML)</p:txBody>"
+        return "<\(wrappingElement)><a:bodyPr/><a:lstStyle/>\(paragraphsXML)</\(wrappingElement)>"
     }
 
     // MARK: - Media
