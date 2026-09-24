@@ -72,6 +72,15 @@ public struct Presentation {
         return index + 1
     }
 
+    // MARK: - Media
+
+    /// 取得圖片元素所嵌入的 media 檔（依 `Picture.mediaFileName` 比對 `MediaFile.fileName`）；
+    /// 圖片未連結 media 或 media 不存在時回傳 nil
+    public func mediaFile(for picture: Picture) -> MediaFile? {
+        guard let name = picture.mediaFileName else { return nil }
+        return images.first { $0.fileName == name }
+    }
+
     // MARK: - Info
 
     public struct Info {
