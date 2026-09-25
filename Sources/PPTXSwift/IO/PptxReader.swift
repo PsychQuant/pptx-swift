@@ -473,7 +473,10 @@ public struct PptxReader {
         if let spPr = try element.nodes(forXPath: "./*[local-name()='spPr']").first as? XMLElement {
             parseShapeProperties(spPr, position: &shape.position, size: &shape.size,
                                rotation: &shape.rotation, flipHorizontal: &shape.flipHorizontal, flipVertical: &shape.flipVertical,
-                               fill: &shape.fill, outline: &shape.outline, geometry: &shape.geometry)
+                               fill: &shape.fill, outline: &shape.outline, geometry: &shape.geometry,
+                               customGeometryXML: &shape.customGeometryXML, rawFillXML: &shape.rawFillXML,
+                               effectXML: &shape.effectXML, scene3dXML: &shape.scene3dXML,
+                               sp3dXML: &shape.sp3dXML, extLstXML: &shape.extLstXML)
         }
 
         // Theme style reference (p:style — PsychQuant/pptx-swift#11), kept
@@ -525,14 +528,30 @@ public struct PptxReader {
         // Crop (#2)
         picture.sourceRect = try parseSourceRect(element)
 
-        // Position and size
+        // Position and size. `Picture` has never modeled its own spPr's
+        // fill／outline／geometry (they're discarded below) — `serializePicture`
+        // unconditionally writes `<a:prstGeom prst="rect">` regardless of what
+        // was read, a pre-existing gap larger than #12's scope (raw-preserving
+        // an unmodeled sibling only helps once the *typed* siblings round-trip
+        // too, which Picture's don't). #12 does not extend `Picture` to the six
+        // new raw-passthrough fields for the same reason #11 also scoped
+        // `Picture` out — documented as a known limitation, not fixed here.
         if let spPr = try element.nodes(forXPath: "./*[local-name()='spPr']").first as? XMLElement {
             var fill: ShapeFill? = nil
             var outline: ShapeOutline? = nil
             var geometry: ShapeGeometry = .rect
+            var customGeometryXML: String? = nil
+            var rawFillXML: String? = nil
+            var effectXML: String? = nil
+            var scene3dXML: String? = nil
+            var sp3dXML: String? = nil
+            var extLstXML: String? = nil
             parseShapeProperties(spPr, position: &picture.position, size: &picture.size,
                                rotation: &picture.rotation, flipHorizontal: &picture.flipHorizontal, flipVertical: &picture.flipVertical,
-                               fill: &fill, outline: &outline, geometry: &geometry)
+                               fill: &fill, outline: &outline, geometry: &geometry,
+                               customGeometryXML: &customGeometryXML, rawFillXML: &rawFillXML,
+                               effectXML: &effectXML, scene3dXML: &scene3dXML,
+                               sp3dXML: &sp3dXML, extLstXML: &extLstXML)
         }
 
         return picture
@@ -682,6 +701,32 @@ public struct PptxReader {
                 group.flipHorizontal = parseXSDBoolean(xfrm.attribute(forName: "flipH")?.stringValue)
                 group.flipVertical = parseXSDBoolean(xfrm.attribute(forName: "flipV")?.stringValue)
             }
+
+            // CT_GroupShapeProperties: xfrm?, EG_FillProperties?,
+            // EG_EffectProperties?, scene3d?, extLst? — a smaller, different
+            // sequence than CT_ShapeProperties (no geometry choice, no ln, no
+            // sp3d). None of these are typed for `GroupShape`, so all round
+            // trip as raw XML (#12); `GroupShape` has no typed `fill` at all,
+            // so unlike `Shape.rawFillXML` there is no typed branch to check
+            // first.
+            for localName in ["solidFill", "gradFill", "blipFill", "pattFill", "grpFill", "noFill"] {
+                if let el = try grpSpPr.nodes(forXPath: "*[local-name()='\(localName)']").first as? XMLElement {
+                    group.rawFillXML = selfContainedXMLString(for: el)
+                    break
+                }
+            }
+            for localName in ["effectLst", "effectDag"] {
+                if let el = try grpSpPr.nodes(forXPath: "*[local-name()='\(localName)']").first as? XMLElement {
+                    group.effectXML = selfContainedXMLString(for: el)
+                    break
+                }
+            }
+            if let el = try grpSpPr.nodes(forXPath: "*[local-name()='scene3d']").first as? XMLElement {
+                group.scene3dXML = selfContainedXMLString(for: el)
+            }
+            if let el = try grpSpPr.nodes(forXPath: "*[local-name()='extLst']").first as? XMLElement {
+                group.extLstXML = selfContainedXMLString(for: el)
+            }
         }
 
         // Parse child elements
@@ -713,6 +758,14 @@ public struct PptxReader {
 
     // MARK: - Shape Properties
 
+    /// `customGeometryXML`／`rawFillXML`／`effectXML`／`scene3dXML`／`sp3dXML`／
+    /// `extLstXML`: `CT_ShapeProperties` children pptx-swift has no typed model
+    /// for — captured self-contained (`selfContainedXMLString`), same mechanism
+    /// as `p:style` (PsychQuant/pptx-swift#11/#12). `customGeometryXML` and
+    /// `rawFillXML` are each the raw alternative to `geometry`/`fill`'s typed
+    /// output (`EG_Geometry`／`EG_FillProperties` are schema *choices* — reading
+    /// both branches independently is safe because a well-formed source XML
+    /// only ever has one).
     private static func parseShapeProperties(
         _ spPr: XMLElement,
         position: inout Position,
@@ -722,7 +775,13 @@ public struct PptxReader {
         flipVertical: inout Bool,
         fill: inout ShapeFill?,
         outline: inout ShapeOutline?,
-        geometry: inout ShapeGeometry
+        geometry: inout ShapeGeometry,
+        customGeometryXML: inout String?,
+        rawFillXML: inout String?,
+        effectXML: inout String?,
+        scene3dXML: inout String?,
+        sp3dXML: inout String?,
+        extLstXML: inout String?
     ) {
         // Position and size
         if let xfrm = try? spPr.nodes(forXPath: "*[local-name()='xfrm']").first as? XMLElement {
@@ -743,13 +802,17 @@ public struct PptxReader {
             flipVertical = parseXSDBoolean(xfrm.attribute(forName: "flipV")?.stringValue)
         }
 
-        // Geometry
+        // Geometry — EG_Geometry: prstGeom | custGeom (schema choice, PsychQuant/pptx-swift#12).
         if let prstGeom = try? spPr.nodes(forXPath: "*[local-name()='prstGeom']").first as? XMLElement {
             let prst = prstGeom.attribute(forName: "prst")?.stringValue ?? "rect"
             geometry = ShapeGeometry(rawValue: prst) ?? .unknown
+        } else if let custGeom = try? spPr.nodes(forXPath: "*[local-name()='custGeom']").first as? XMLElement {
+            customGeometryXML = selfContainedXMLString(for: custGeom)
         }
 
-        // Fill
+        // Fill — EG_FillProperties: noFill | solidFill | gradFill | blipFill |
+        // pattFill | grpFill (schema choice). Only noFill／solidFill are typed;
+        // the rest round-trip as raw XML (#12).
         if let solidFill = try? spPr.nodes(forXPath: "*[local-name()='solidFill']").first as? XMLElement {
             if let srgb = try? solidFill.nodes(forXPath: "*[local-name()='srgbClr']").first as? XMLElement {
                 fill = .solid(color: srgb.attribute(forName: "val")?.stringValue ?? "000000")
@@ -758,6 +821,13 @@ public struct PptxReader {
             }
         } else if (try? spPr.nodes(forXPath: "*[local-name()='noFill']").first) != nil {
             fill = .noFill
+        } else {
+            for localName in ["gradFill", "blipFill", "pattFill", "grpFill"] {
+                if let el = try? spPr.nodes(forXPath: "*[local-name()='\(localName)']").first as? XMLElement {
+                    rawFillXML = selfContainedXMLString(for: el)
+                    break
+                }
+            }
         }
 
         // Outline
@@ -780,6 +850,24 @@ public struct PptxReader {
             shapeOutline.headEnd = lineEnd("headEnd")
             shapeOutline.tailEnd = lineEnd("tailEnd")
             outline = shapeOutline
+        }
+
+        // EG_EffectProperties: effectLst | effectDag (schema choice), #12.
+        for localName in ["effectLst", "effectDag"] {
+            if let el = try? spPr.nodes(forXPath: "*[local-name()='\(localName)']").first as? XMLElement {
+                effectXML = selfContainedXMLString(for: el)
+                break
+            }
+        }
+        // scene3d／sp3d／extLst: each independently optional, not a choice group.
+        if let el = try? spPr.nodes(forXPath: "*[local-name()='scene3d']").first as? XMLElement {
+            scene3dXML = selfContainedXMLString(for: el)
+        }
+        if let el = try? spPr.nodes(forXPath: "*[local-name()='sp3d']").first as? XMLElement {
+            sp3dXML = selfContainedXMLString(for: el)
+        }
+        if let el = try? spPr.nodes(forXPath: "*[local-name()='extLst']").first as? XMLElement {
+            extLstXML = selfContainedXMLString(for: el)
         }
     }
 
@@ -810,10 +898,18 @@ public struct PptxReader {
         }
 
         if let spPr = try element.nodes(forXPath: "./*[local-name()='spPr']").first as? XMLElement {
+            // Connector has no typed `fill` field (a filled connector — e.g. a
+            // custom-shaped arrowhead — is legal but rare); the typed-fill
+            // half of parseShapeProperties's output is discarded, but
+            // `rawFillXML` still lands on `connector.rawFillXML` (#12) — the
+            // two are independent outputs, not a mutually-exclusive pair here.
             var fill: ShapeFill? = nil
             parseShapeProperties(spPr, position: &connector.position, size: &connector.size,
                                rotation: &connector.rotation, flipHorizontal: &connector.flipHorizontal, flipVertical: &connector.flipVertical,
-                               fill: &fill, outline: &connector.outline, geometry: &connector.geometry)
+                               fill: &fill, outline: &connector.outline, geometry: &connector.geometry,
+                               customGeometryXML: &connector.customGeometryXML, rawFillXML: &connector.rawFillXML,
+                               effectXML: &connector.effectXML, scene3dXML: &connector.scene3dXML,
+                               sp3dXML: &connector.sp3dXML, extLstXML: &connector.extLstXML)
             // 預設幾何的調整值（a:prstGeom/a:avLst/a:gd），彎折／曲線連接線
             // 的實際轉折點常偏離預設路徑，靠這些調整值記錄（Codex round 1
             // review：先前完全不讀，寫出時永遠變回預設路徑）。

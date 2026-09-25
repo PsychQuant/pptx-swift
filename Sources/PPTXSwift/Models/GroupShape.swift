@@ -26,6 +26,18 @@ public struct GroupShape {
     /// 是否沿水平軸垂直翻轉（`a:xfrm` 的 `flipV`）。
     public var flipVertical: Bool
     public var elements: [SlideElement]
+    /// `CT_GroupShapeProperties`（`p:grpSpPr`）子元素 pptx-swift 沒有型別化模型
+    /// 的部分，原樣保存、寫出時放回 schema 正確位置（PsychQuant/pptx-swift#12）。
+    /// `grpSpPr` 的 schema 序列是 `xfrm?, EG_FillProperties?, EG_EffectProperties?,
+    /// scene3d?, extLst?`——跟 `CT_ShapeProperties`（`Shape`／`Connector` 用的
+    /// 那個）不同：**沒有** `EG_Geometry`（不能是 custGeom／prstGeom，群組本身
+    /// 沒有外框路徑）也**沒有** `a:ln`／`a:sp3d`。`GroupShape` 目前完全沒有型別化
+    /// 的 `fill` 欄位，所以 `rawFillXML` 是單純原樣保留，不像 `Shape.rawFillXML`
+    /// 有互斥的 typed 版本。
+    public var rawFillXML: String?
+    public var effectXML: String?
+    public var scene3dXML: String?
+    public var extLstXML: String?
 
     public init(
         id: Int = 0,
@@ -37,7 +49,11 @@ public struct GroupShape {
         rotation: Int = 0,
         flipHorizontal: Bool = false,
         flipVertical: Bool = false,
-        elements: [SlideElement] = []
+        elements: [SlideElement] = [],
+        rawFillXML: String? = nil,
+        effectXML: String? = nil,
+        scene3dXML: String? = nil,
+        extLstXML: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -49,6 +65,10 @@ public struct GroupShape {
         self.flipHorizontal = flipHorizontal
         self.flipVertical = flipVertical
         self.elements = elements
+        self.rawFillXML = rawFillXML
+        self.effectXML = effectXML
+        self.scene3dXML = scene3dXML
+        self.extLstXML = extLstXML
     }
 
     /// 取得群組內所有文字
