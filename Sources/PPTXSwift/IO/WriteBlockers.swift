@@ -164,7 +164,7 @@ public struct WriteBlocker: Equatable, CustomStringConvertible {
         switch reason {
         case .unsupportedMedia:
             return "含音訊、影片或換場音效：pptx-swift 尚未建模播放觸發、時間軸（p:timing）與換場音效，寫出會遺失播放能力"
-        case .relationshipReference(.wholeElement, let attributes) where isEmbeddedObject:
+        case .relationshipReference(.wholeElement, let attributes) where storesContentInAnotherPart:
             return "內容存放在檔案的另一個 part，透過 relationship（\(attributes.joined(separator: "、"))）引用；"
                 + "pptx-swift 會重新配置 relationship，無法保證寫出後仍指向它"
         case .relationshipReference(let part, let attributes):
@@ -192,8 +192,8 @@ public struct WriteBlocker: Equatable, CustomStringConvertible {
         label.last?.isASCII == true ? label + " " : label
     }
 
-    private var isEmbeddedObject: Bool {
-        if case .embeddedObject? = element { return true }
+    private var storesContentInAnotherPart: Bool {
+        if case .embeddedObject(let kind)? = element { return kind.storesContentInAnotherPart }
         return false
     }
 }
@@ -392,9 +392,12 @@ enum WriteBlockerScan {
             if let allowed = fragment.part.allowedRootNames, !allowed.contains(root.localName ?? "") {
                 throw FragmentProblem.unexpectedRoot(found: root.name ?? root.localName ?? "?", allowed: allowed.sorted())
             }
+            // 同一個屬性名稱只列一次（R3 M-1'：一個表格的 16 個 r:embed 不必逐一列出）。
+            var seen = Set<String>()
             return try document.nodes(forXPath: "//@*")
                 .filter { relationshipNamespaces.contains($0.uri ?? "") }
                 .map { $0.name ?? $0.localName ?? "?" }
+                .filter { seen.insert($0).inserted }
         }
     }
 

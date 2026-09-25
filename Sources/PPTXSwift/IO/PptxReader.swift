@@ -977,9 +977,13 @@ public struct PptxReader {
     private static func parseRawSlideElement(_ element: XMLElement) throws -> RawSlideElement {
         let localName = element.localName ?? element.name ?? "unknown"
 
+        // 同一個 id 只列一次：mc:AlternateContent 的 Choice 與 Fallback 常宣告同一個
+        // cNvPr id（#12 審查 R3 L-1'）。
+        var seenIds = Set<Int>()
         let ids = try element.nodes(forXPath: ".//*[local-name()='cNvPr']/@id")
             .compactMap { $0.stringValue }
             .compactMap { Int($0) }
+            .filter { seenIds.insert($0).inserted }
 
         // Foundation 的 XPath 在 attribute node 上不可靠地支援
         // namespace-uri()（PackageInspector.relationshipReferences 的既有
