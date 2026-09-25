@@ -169,7 +169,7 @@ public struct WriteBlocker: Equatable, CustomStringConvertible {
         var text = enclosingGroupIds.isEmpty
             ? ""
             : enclosingGroupIds.map { "群組 id=\($0)" }.joined(separator: " > ") + " 內的"
-        text += element.displayName
+        text = cjkJoined(text, element.displayName)
         if let elementId { text += " id=\(elementId)" }
         if let elementName, !elementName.isEmpty { text += "「\(elementName)」" }
         return text
@@ -200,8 +200,26 @@ public struct WriteBlocker: Equatable, CustomStringConvertible {
     public var description: String {
         let slide = "投影片 \(slideIndex + 1)"
         guard element != nil else { return "\(slide) \(reasonDescription)，拒絕存檔" }
-        return "\(slide) 的\(elementDescription)：\(reasonDescription)，拒絕存檔"
+        return cjkJoined("\(slide) 的", elementDescription) + "：\(reasonDescription)，拒絕存檔"
     }
+
+    /// 接起兩段文字，交界處一邊是漢字、另一邊是英數字時補一個空格（「的 OLE」
+    /// 「內的 SmartArt」），其他情況（全形標點、已有空格）原樣相接（#12 審查 R3 L-4'）。
+    /// 公開給把 `elementDescription`、`EmbeddedObjectKind.displayName` 接進自己訊息的
+    /// 呼叫端（例如 che-pptx-mcp），讓兩邊的用語排版一致。
+    public static func cjkJoined(_ left: String, _ right: String) -> String {
+        guard let last = left.unicodeScalars.last, let first = right.unicodeScalars.first else { return left + right }
+        func isHan(_ scalar: Unicode.Scalar) -> Bool {
+            (0x4E00...0x9FFF).contains(scalar.value) || (0x3400...0x4DBF).contains(scalar.value)
+        }
+        func isLatin(_ scalar: Unicode.Scalar) -> Bool {
+            scalar.isASCII && (CharacterSet.alphanumerics.contains(scalar))
+        }
+        let needsSpace = (isHan(last) && isLatin(first)) || (isLatin(last) && isHan(first))
+        return needsSpace ? left + " " + right : left + right
+    }
+
+    private func cjkJoined(_ left: String, _ right: String) -> String { Self.cjkJoined(left, right) }
 
     /// 以 ASCII 結尾的標籤（`p:style`、`原樣 XML`）後面接中文前補一個空格。
     private func spaced(_ label: String) -> String {

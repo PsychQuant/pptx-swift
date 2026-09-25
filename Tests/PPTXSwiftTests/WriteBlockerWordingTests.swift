@@ -4,7 +4,8 @@ import OOXMLSwift
 @testable import PPTXSwift
 
 /// #12 審查 R3：M-1'（包在 `mc:AlternateContent` 裡的表格被說成圖表類物件、原因
-/// 寫錯、屬性重複列出）、L-1'（id 重複）、L-3'（根元素的命名空間）。
+/// 寫錯、屬性重複列出）、L-1'（id 重複）、L-3'（根元素的命名空間）、L-4'（中英文
+/// 之間的空格）。
 struct WriteBlockerWordingTests {
     static let nsA = "http://schemas.openxmlformats.org/drawingml/2006/main"
     static let tableURI = "http://schemas.openxmlformats.org/drawingml/2006/table"
@@ -68,5 +69,18 @@ struct WriteBlockerWordingTests {
         var pres = PptxWriter.createNew()
         pres.slides[0].elements = [.shape(shape)]
         #expect(pres.writeBlockers.isEmpty, "\(pres.writeBlockers)")
+    }
+
+    // MARK: - L-4'
+
+    @Test func `Chinese and Latin words are separated by a space`() throws {
+        let ole = WriteBlockerReportingTests.ole
+        let grouped = "<p:grpSp><p:nvGrpSpPr><p:cNvPr id=\"91\" name=\"g\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>"
+            + "<p:grpSpPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"1\" cy=\"1\"/><a:chOff x=\"0\" y=\"0\"/><a:chExt cx=\"1\" cy=\"1\"/></a:xfrm></p:grpSpPr>"
+            + ole + "</p:grpSp>"
+        let top = try #require(try SpPrProbePackage.read(withPictures: false, extraShapeTreeXML: ole).writeBlockers.first)
+        #expect(top.description.contains("投影片 1 的 OLE 內嵌物件 id=32"), "\(top.description)")
+        let nested = try #require(try SpPrProbePackage.read(withPictures: false, extraShapeTreeXML: grouped).writeBlockers.first)
+        #expect(nested.description.contains("群組 id=91 內的 OLE 內嵌物件 id=32"), "\(nested.description)")
     }
 }
