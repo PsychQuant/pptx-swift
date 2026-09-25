@@ -71,8 +71,21 @@ public enum EmbeddedObjectKind: Equatable {
     case smartArt
     /// OLE 物件：`…/presentationml/2006/ole`。
     case oleObject
+    /// 表格：`…/drawingml/2006/table`。單獨出現的表格 graphicFrame 讀成 typed
+    /// `.graphicFrame`，只有包在 `mc:AlternateContent` 等未建模元素裡時才會以
+    /// 這個種類出現（#12 審查 R3 M-1'）。
+    case table
     /// 其他（或讀不到 `uri`）的內嵌物件。
     case other(graphicDataURI: String?)
+
+    /// 內容存放在簡報檔的另一個 part、graphicFrame 只以 relationship 指向它的種類
+    /// （圖表、SmartArt、OLE）。表格的內容就在投影片裡；未知種類無從判斷。
+    public var storesContentInAnotherPart: Bool {
+        switch self {
+        case .chart, .smartArt, .oleObject: return true
+        case .table, .other: return false
+        }
+    }
 
     public init(graphicDataURI uri: String?) {
         switch uri {
@@ -86,6 +99,9 @@ public enum EmbeddedObjectKind: Equatable {
         case "http://schemas.openxmlformats.org/presentationml/2006/ole",
              "http://purl.oclc.org/ooxml/presentationml/ole":
             self = .oleObject
+        case "http://schemas.openxmlformats.org/drawingml/2006/table",
+             "http://purl.oclc.org/ooxml/drawingml/table":
+            self = .table
         default:
             self = .other(graphicDataURI: uri)
         }
@@ -97,6 +113,7 @@ public enum EmbeddedObjectKind: Equatable {
         case .chart: return "圖表"
         case .smartArt: return "SmartArt 圖形"
         case .oleObject: return "OLE 內嵌物件"
+        case .table: return "表格"
         case .other: return "圖表、SmartArt 或 OLE 等內嵌物件"
         }
     }
