@@ -476,6 +476,12 @@ public struct PptxReader {
                                fill: &shape.fill, outline: &shape.outline, geometry: &shape.geometry)
         }
 
+        // Theme style reference (p:style — PsychQuant/pptx-swift#11), kept
+        // verbatim; see `Shape.styleXML`'s doc comment for why.
+        if let style = try element.nodes(forXPath: "./*[local-name()='style']").first as? XMLElement {
+            shape.styleXML = selfContainedXMLString(for: style)
+        }
+
         // Text body
         if let txBody = try element.nodes(forXPath: "./*[local-name()='txBody']").first as? XMLElement {
             shape.textBody = try parseTextBody(txBody)
@@ -819,6 +825,13 @@ public struct PptxReader {
                     connector.adjustments.append(GeometryAdjustment(name: name, formula: formula))
                 }
             }
+        }
+
+        // Theme style reference (p:style — PsychQuant/pptx-swift#11), kept
+        // verbatim; see `Connector.styleXML`'s doc comment for why. `shapes.pptx`'s
+        // three connectors get their line color *only* from this.
+        if let style = try element.nodes(forXPath: "./*[local-name()='style']").first as? XMLElement {
+            connector.styleXML = selfContainedXMLString(for: style)
         }
 
         return connector

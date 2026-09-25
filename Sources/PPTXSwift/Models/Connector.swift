@@ -32,6 +32,12 @@ public struct Connector {
     /// `<a:avLst/>`，會靜默丟棄讀進來的調整值——即使邊界框、旋轉、連接點都
     /// 沒變，連接線實際繞行的路徑仍可能因此跑掉。
     public var adjustments: [GeometryAdjustment]
+    /// `p:style`（`CT_ShapeStyle`）的原始 XML，self-contained——與 `Shape.styleXML`
+    /// 完全同一個機制與理由（PsychQuant/pptx-swift#11）。`shapes.pptx` 這個真實
+    /// fixture 的三個連接線全部只靠這個（`lnRef idx="1"` 參照主題 `accent1`）取得
+    /// 線條顏色，沒有一個帶明確的 `<a:ln><a:solidFill>`——這正是 #11 要修的、#10
+    /// 修好表格後才第一次被完整往返測試觀察到的視覺遺失。
+    public var styleXML: String?
 
     public init(
         id: Int = 0,
@@ -45,7 +51,8 @@ public struct Connector {
         outline: ShapeOutline? = nil,
         startConnection: ConnectionSite? = nil,
         endConnection: ConnectionSite? = nil,
-        adjustments: [GeometryAdjustment] = []
+        adjustments: [GeometryAdjustment] = [],
+        styleXML: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -59,6 +66,7 @@ public struct Connector {
         self.startConnection = startConnection
         self.endConnection = endConnection
         self.adjustments = adjustments
+        self.styleXML = styleXML
     }
 }
 
