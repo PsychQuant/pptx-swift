@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-25
+
 ### ⚠️ Source-breaking and behavior changes
 
 - `SlideElement` gains two cases, `.connector` and `.raw` (#9): an exhaustive `switch` over `SlideElement` no longer compiles until it handles them.
