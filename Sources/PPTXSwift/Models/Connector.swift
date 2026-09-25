@@ -38,6 +38,21 @@ public struct Connector {
     /// 線條顏色，沒有一個帶明確的 `<a:ln><a:solidFill>`——這正是 #11 要修的、#10
     /// 修好表格後才第一次被完整往返測試觀察到的視覺遺失。
     public var styleXML: String?
+    /// `CT_ShapeProperties`（`p:spPr`）子元素 pptx-swift 沒有型別化模型的部分，
+    /// 原樣保存、寫出時放回 schema 正確位置——與 `Shape` 的同名欄位完全同一個
+    /// 機制與理由（PsychQuant/pptx-swift#12）。`customGeometryXML` 與
+    /// `geometry`（`<a:prstGeom>`）互斥，非 nil 時優先。`rawFillXML`
+    /// 對應 `EG_FillProperties`（`<a:gradFill>`／`<a:blipFill>`／`<a:pattFill>`／
+    /// `<a:grpFill>`）——`Connector` 沒有型別化的 `fill` 欄位（連接線本身有填色
+    /// 在 schema 上合法但罕見），所以這裡不像 `Shape.rawFillXML` 有「互斥的
+    /// typed 版本」，單純是原樣保留、非 nil 時輸出。`effectXML`／`scene3dXML`／
+    /// `sp3dXML`／`extLstXML` 意義與 `Shape` 完全相同。
+    public var customGeometryXML: String?
+    public var rawFillXML: String?
+    public var effectXML: String?
+    public var scene3dXML: String?
+    public var sp3dXML: String?
+    public var extLstXML: String?
 
     public init(
         id: Int = 0,
@@ -52,7 +67,13 @@ public struct Connector {
         startConnection: ConnectionSite? = nil,
         endConnection: ConnectionSite? = nil,
         adjustments: [GeometryAdjustment] = [],
-        styleXML: String? = nil
+        styleXML: String? = nil,
+        customGeometryXML: String? = nil,
+        rawFillXML: String? = nil,
+        effectXML: String? = nil,
+        scene3dXML: String? = nil,
+        sp3dXML: String? = nil,
+        extLstXML: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -67,6 +88,12 @@ public struct Connector {
         self.endConnection = endConnection
         self.adjustments = adjustments
         self.styleXML = styleXML
+        self.customGeometryXML = customGeometryXML
+        self.rawFillXML = rawFillXML
+        self.effectXML = effectXML
+        self.scene3dXML = scene3dXML
+        self.sp3dXML = sp3dXML
+        self.extLstXML = extLstXML
     }
 }
 

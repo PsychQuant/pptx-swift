@@ -34,6 +34,30 @@ public struct Shape {
     /// shape has no `p:style` (most synthetically-constructed shapes, and any
     /// shape whose color is fully explicit in `spPr`).
     public var styleXML: String?
+    /// `CT_ShapeProperties`（`p:spPr`）子元素 pptx-swift 沒有型別化模型的部分，
+    /// 原樣保存、寫出時放回 schema 正確位置（PsychQuant/pptx-swift#12，`#9`／
+    /// `#11` 的原則延伸：未建模的內容原樣往返，不默默丟掉）。每個欄位 `nil`
+    /// 表示來源形狀沒有這一段。
+    ///
+    /// `customGeometryXML`（`<a:custGeom>`）與 `geometry`（`<a:prstGeom>`）是
+    /// schema 上的 `EG_Geometry` 互斥選擇——寫出時兩者只會出現一個，
+    /// `customGeometryXML` 非 nil 時優先，完全略過 `geometry` 的值。
+    ///
+    /// `rawFillXML` 涵蓋 `EG_FillProperties` 裡 `fill`（`ShapeFill`）沒有型別化
+    /// 的選項——`<a:gradFill>`／`<a:blipFill>`／`<a:pattFill>`／`<a:grpFill>`
+    /// （`fill` 目前只認得 `<a:noFill>`／`<a:solidFill>`）；與 `fill` 同樣互斥，
+    /// `rawFillXML` 非 nil 時優先。
+    ///
+    /// `effectXML` 是 `EG_EffectProperties`（`<a:effectLst>` 或 `<a:effectDag>`，
+    /// 兩者互斥，原樣保留來源用的是哪一個）；`scene3dXML`／`sp3dXML`／
+    /// `extLstXML` 各自對應 `<a:scene3d>`／`<a:sp3d>`／`<a:extLst>`，三者互不
+    /// 互斥、各自獨立存在。
+    public var customGeometryXML: String?
+    public var rawFillXML: String?
+    public var effectXML: String?
+    public var scene3dXML: String?
+    public var sp3dXML: String?
+    public var extLstXML: String?
 
     public init(
         id: Int = 0,
@@ -48,7 +72,13 @@ public struct Shape {
         fill: ShapeFill? = nil,
         outline: ShapeOutline? = nil,
         textBody: TextBody? = nil,
-        styleXML: String? = nil
+        styleXML: String? = nil,
+        customGeometryXML: String? = nil,
+        rawFillXML: String? = nil,
+        effectXML: String? = nil,
+        scene3dXML: String? = nil,
+        sp3dXML: String? = nil,
+        extLstXML: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -63,6 +93,12 @@ public struct Shape {
         self.outline = outline
         self.textBody = textBody
         self.styleXML = styleXML
+        self.customGeometryXML = customGeometryXML
+        self.rawFillXML = rawFillXML
+        self.effectXML = effectXML
+        self.scene3dXML = scene3dXML
+        self.sp3dXML = sp3dXML
+        self.extLstXML = extLstXML
     }
 }
 

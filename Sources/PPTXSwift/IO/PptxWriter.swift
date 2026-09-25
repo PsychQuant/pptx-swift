@@ -482,6 +482,14 @@ public struct PptxWriter {
 
         let xfrmAttrs = xfrmTransformAttributes(
             rotation: group.rotation, flipHorizontal: group.flipHorizontal, flipVertical: group.flipVertical)
+        // CT_GroupShapeProperties (#12): xfrm?, EG_FillProperties?,
+        // EG_EffectProperties?, scene3d?, extLst? — a smaller sequence than
+        // CT_ShapeProperties (no geometry choice, no ln, no sp3d), so this
+        // does not share `spPrTailExtrasXML` with Shape/Connector. `rawFillXML`
+        // has no typed counterpart to be mutually exclusive with — `GroupShape`
+        // has never modeled a typed fill.
+        let extrasXML = [group.rawFillXML, group.effectXML, group.scene3dXML, group.extLstXML]
+            .compactMap { $0 }.joined(separator: "\n                  ")
 
         return """
               <p:grpSp>
@@ -497,6 +505,7 @@ public struct PptxWriter {
                     <a:chOff x="\(group.childOffset.x)" y="\(group.childOffset.y)"/>
                     <a:chExt cx="\(group.childExtent.width)" cy="\(group.childExtent.height)"/>
                   </a:xfrm>
+                  \(extrasXML)
                 </p:grpSpPr>
         \(childXML)      </p:grpSp>
 
@@ -512,19 +521,30 @@ public struct PptxWriter {
             phXML = "<p:ph type=\"\(ph.rawValue)\"/>"
         }
 
-        var fillXML = ""
+        // Geometry — EG_Geometry choice (PsychQuant/pptx-swift#12):
+        // `customGeometryXML` (raw `<a:custGeom>`) takes priority and
+        // *replaces* `<a:prstGeom>` entirely — writing both is invalid XML
+        // (the schema only allows one).
+        let geometryXML = shape.customGeometryXML
+            ?? "<a:prstGeom prst=\"\(shape.geometry.rawValue)\"><a:avLst/></a:prstGeom>"
+
+        // Fill — EG_FillProperties choice: `rawFillXML` (raw `<a:gradFill>`／
+        // `<a:blipFill>`／`<a:pattFill>`／`<a:grpFill>`) takes priority over
+        // the typed `fill`, same mutual-exclusivity reasoning as geometry.
+        var typedFillXML = ""
         if let fill = shape.fill {
             switch fill {
             case .solid(let color):
-                fillXML = "<a:solidFill><a:srgbClr val=\"\(color)\"/></a:solidFill>"
+                typedFillXML = "<a:solidFill><a:srgbClr val=\"\(color)\"/></a:solidFill>"
             case .schemeColor(let name):
-                fillXML = "<a:solidFill><a:schemeClr val=\"\(name)\"/></a:solidFill>"
+                typedFillXML = "<a:solidFill><a:schemeClr val=\"\(name)\"/></a:solidFill>"
             case .noFill:
-                fillXML = "<a:noFill/>"
+                typedFillXML = "<a:noFill/>"
             case .gradient:
                 break
             }
         }
+        let fillXML = shape.rawFillXML ?? typedFillXML
 
         var textBodyXML = ""
         if let textBody = shape.textBody {
@@ -539,6 +559,12 @@ public struct PptxWriter {
         // (the vast majority of shapes, and every shape before #11) writes
         // no tag at all, not an empty one.
         let styleXML = shape.styleXML ?? ""
+        // effectLst／effectDag, scene3d, sp3d, extLst (#12): each raw, each
+        // optional, each omitted (not an empty tag) when nil — same splice
+        // pattern as the rest of this function's spPr children.
+        let tailXML = spPrTailExtrasXML(
+            effectXML: shape.effectXML, scene3dXML: shape.scene3dXML,
+            sp3dXML: shape.sp3dXML, extLstXML: shape.extLstXML)
 
         return """
               <p:sp>
@@ -552,14 +578,29 @@ public struct PptxWriter {
                     <a:off x="\(shape.position.x)" y="\(shape.position.y)"/>
                     <a:ext cx="\(shape.size.width)" cy="\(shape.size.height)"/>
                   </a:xfrm>
-                  <a:prstGeom prst="\(shape.geometry.rawValue)"><a:avLst/></a:prstGeom>
+                  \(geometryXML)
                   \(fillXML)
+                  \(tailXML)
                 </p:spPr>
                 \(styleXML)
                 \(textBodyXML)
               </p:sp>
 
         """
+    }
+
+    /// `<a:effectLst>`／`<a:effectDag>`, `<a:scene3d>`, `<a:sp3d>`,
+    /// `<a:extLst>` — the tail of `CT_ShapeProperties`'s sequence, after
+    /// `<a:ln>` (PsychQuant/pptx-swift#12). Each is raw, self-contained XML
+    /// (`PptxReader.selfContainedXMLString`) or omitted entirely when nil —
+    /// shared between `serializeShape` and `serializeConnector` since both
+    /// use the exact same `CT_ShapeProperties` tail. `GroupShape`'s
+    /// `grpSpPr` does NOT use this — `CT_GroupShapeProperties` has no `ln`
+    /// or `sp3d` slot, so its assembly is separate (`serializeGroupShape`).
+    private static func spPrTailExtrasXML(
+        effectXML: String?, scene3dXML: String?, sp3dXML: String?, extLstXML: String?
+    ) -> String {
+        [effectXML, scene3dXML, sp3dXML, extLstXML].compactMap { $0 }.joined(separator: "\n                  ")
     }
 
     /// `p:cxnSp`（PsychQuant/pptx-swift#9）：`spPr` 用與 `p:sp`／`p:pic` 相同的
@@ -586,11 +627,22 @@ public struct PptxWriter {
         let avLstXML = connector.adjustments.isEmpty
             ? "<a:avLst/>"
             : "<a:avLst>" + connector.adjustments.map { "<a:gd name=\"\(escapeXML($0.name))\" fmla=\"\(escapeXML($0.formula))\"/>" }.joined() + "</a:avLst>"
+        // Geometry — EG_Geometry choice (#12): `customGeometryXML` replaces
+        // `<a:prstGeom>` (and its adjustments, meaningless for a custGeom
+        // path) entirely.
+        let geometryXML = connector.customGeometryXML
+            ?? "<a:prstGeom prst=\"\(connector.geometry.rawValue)\">\(avLstXML)</a:prstGeom>"
+        // rawFillXML (#12): Connector has no typed fill to be "mutually
+        // exclusive" with — see the doc comment on `Connector.rawFillXML`.
+        let fillXML = connector.rawFillXML ?? ""
         // p:style（PsychQuant/pptx-swift#11）: CT_Connector's sequence places
         // it right after spPr, as the element's last child (no txBody to
         // precede, unlike CT_Shape) — same self-contained-XML splice as
         // Shape.styleXML.
         let styleXML = connector.styleXML ?? ""
+        let tailXML = spPrTailExtrasXML(
+            effectXML: connector.effectXML, scene3dXML: connector.scene3dXML,
+            sp3dXML: connector.sp3dXML, extLstXML: connector.extLstXML)
 
         return """
               <p:cxnSp>
@@ -604,8 +656,10 @@ public struct PptxWriter {
                     <a:off x="\(connector.position.x)" y="\(connector.position.y)"/>
                     <a:ext cx="\(connector.size.width)" cy="\(connector.size.height)"/>
                   </a:xfrm>
-                  <a:prstGeom prst="\(connector.geometry.rawValue)">\(avLstXML)</a:prstGeom>
+                  \(geometryXML)
+                  \(fillXML)
                   \(lnXML)
+                  \(tailXML)
                 </p:spPr>
                 \(styleXML)
               </p:cxnSp>
