@@ -54,7 +54,7 @@ struct RealFileTests {
             try PptxWriter.write(pres, to: refusedURL)
         }
         if case .writeError(let message)? = error {
-            #expect(message.contains("graphicFrame"), "\(file)：\(message)")
+            #expect(message.contains("OLE 內嵌物件"), "\(file)：\(message)")
         }
         #expect(!FileManager.default.fileExists(atPath: refusedURL.path))
 

@@ -40,7 +40,7 @@ struct NonTableGraphicFrameTests {
             Issue.record("expected .writeError, got \(String(describing: error))")
             return
         }
-        #expect(message.contains("graphicFrame"), "the message must name the element kind: \(message)")
+        #expect(message.contains("圖表 id=30"), "the message must say it is a chart, by id: \(message)")
         #expect(!FileManager.default.fileExists(atPath: url.path))
     }
 

@@ -13,8 +13,8 @@ struct WriteBlockerTests {
     @Test func `The probe lists exactly the picture-filled shape as a blocker`() throws {
         let pres = try SpPrProbePackage.read(withPictures: true)
         #expect(pres.writeBlockers == [
-            WriteBlocker(slideIndex: 0, elementKind: "形狀", elementId: 20, elementName: "BlipFillShape",
-                         reason: .relationshipReference(location: "spPr 的填色", attributes: ["r:embed"])),
+            WriteBlocker(slideIndex: 0, element: .shape, elementId: 20, elementName: "BlipFillShape",
+                         reason: .relationshipReference(part: .fill, attributes: ["r:embed"])),
         ])
     }
 
@@ -34,9 +34,9 @@ struct WriteBlockerTests {
 
         let found = pres.writeBlockers.map { ($0.elementId, $0.reason) }
         #expect(found.count == 3, "\(pres.writeBlockers)")
-        #expect(found.contains { $0.0 == 2 && $0.1 == .relationshipReference(location: "spPr 的 extLst", attributes: ["rel:embed"]) })
-        #expect(found.contains { $0.0 == 3 && $0.1 == .relationshipReference(location: "spPr 的效果", attributes: ["rel:embed"]) })
-        #expect(found.contains { $0.0 == 4 && $0.1 == .relationshipReference(location: "grpSpPr 的填色", attributes: ["rel:embed"]) })
+        #expect(found.contains { $0.0 == 2 && $0.1 == .relationshipReference(part: .extensionList, attributes: ["rel:embed"]) })
+        #expect(found.contains { $0.0 == 3 && $0.1 == .relationshipReference(part: .effects, attributes: ["rel:embed"]) })
+        #expect(found.contains { $0.0 == 4 && $0.1 == .relationshipReference(part: .fill, attributes: ["rel:embed"]) })
 
         let url = TemporaryPPTX.url("blockers-all")
         defer { try? FileManager.default.removeItem(at: url) }
@@ -96,7 +96,9 @@ struct WriteBlockerTests {
         shape.effectXML = "<a:effectLst><a:outerShdw>"
         var pres = PptxWriter.createNew()
         pres.slides[0].elements = [.shape(shape)]
-        #expect(pres.writeBlockers.map(\.reason) == [.malformedPassthroughXML(location: "spPr 的效果")])
+        #expect(pres.writeBlockers.map(\.reason) == [.malformedPassthroughXML(part: .effects, detail: "無法解析")])
+        #expect(pres.writeBlockers.first?.description.contains("spPr 的效果的原樣 XML 無法解析") == true,
+                "\(pres.writeBlockers)")
     }
 
     @Test(arguments: [ShapeGeometry.unknown, .custom])
