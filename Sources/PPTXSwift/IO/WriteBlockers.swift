@@ -80,6 +80,22 @@ public struct WriteBlocker: Equatable, CustomStringConvertible {
         /// 整個未建模元素本身（`.raw`）。
         case wholeElement
 
+        /// 這個位置的根元素必須屬於的命名空間（Transitional 與 Strict）；`nil` 表示
+        /// 不限（#12 審查 R3 L-3'：只比對 local name 的話，`<p:noFill/>` 這種名字對、
+        /// 命名空間錯的片段會放行）。
+        var allowedRootNamespaces: Set<String>? {
+            switch self {
+            case .style:
+                return ["http://schemas.openxmlformats.org/presentationml/2006/main",
+                        "http://purl.oclc.org/ooxml/presentationml/main"]
+            case .wholeElement:
+                return nil
+            case .geometry, .fill, .outline, .effects, .scene3d, .shape3d, .extensionList:
+                return ["http://schemas.openxmlformats.org/drawingml/2006/main",
+                        "http://purl.oclc.org/ooxml/drawingml/main"]
+            }
+        }
+
         /// 這個位置可以放的根元素 local name；`nil` 表示任何單一元素都可以。
         var allowedRootNames: Set<String>? {
             switch self {
@@ -344,6 +360,7 @@ enum WriteBlockerScan {
         case rootCount(Int)
         case textOutsideRoot
         case unexpectedRoot(found: String, allowed: [String])
+        case unexpectedNamespace(found: String, uri: String?)
 
         var detail: String {
             switch self {
@@ -352,6 +369,8 @@ enum WriteBlockerScan {
             case .textOutsideRoot: return "在根元素之外還有文字"
             case .unexpectedRoot(let found, let allowed):
                 return "的根元素 <\(found)> 不能放在這個位置（應為 \(allowed.map { "<\($0)>" }.joined(separator: "／"))）"
+            case .unexpectedNamespace(let found, let uri):
+                return "的根元素 <\(found)> 的命名空間不對（是 \(uri ?? "無命名空間")）"
             }
         }
     }
@@ -391,6 +410,9 @@ enum WriteBlockerScan {
             guard !strayText else { throw FragmentProblem.textOutsideRoot }
             if let allowed = fragment.part.allowedRootNames, !allowed.contains(root.localName ?? "") {
                 throw FragmentProblem.unexpectedRoot(found: root.name ?? root.localName ?? "?", allowed: allowed.sorted())
+            }
+            if let namespaces = fragment.part.allowedRootNamespaces, !namespaces.contains(root.uri ?? "") {
+                throw FragmentProblem.unexpectedNamespace(found: root.name ?? root.localName ?? "?", uri: root.uri)
             }
             // 同一個屬性名稱只列一次（R3 M-1'：一個表格的 16 個 r:embed 不必逐一列出）。
             var seen = Set<String>()

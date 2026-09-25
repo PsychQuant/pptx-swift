@@ -4,7 +4,7 @@ import OOXMLSwift
 @testable import PPTXSwift
 
 /// #12 審查 R3：M-1'（包在 `mc:AlternateContent` 裡的表格被說成圖表類物件、原因
-/// 寫錯、屬性重複列出）、L-1'（id 重複）。
+/// 寫錯、屬性重複列出）、L-1'（id 重複）、L-3'（根元素的命名空間）。
 struct WriteBlockerWordingTests {
     static let nsA = "http://schemas.openxmlformats.org/drawingml/2006/main"
     static let tableURI = "http://schemas.openxmlformats.org/drawingml/2006/table"
@@ -45,5 +45,28 @@ struct WriteBlockerWordingTests {
             return nil
         }.first)
         #expect(raw.elementIds == [4], "Choice and Fallback both declare cNvPr id=4")
+    }
+
+    // MARK: - L-3'
+
+    @Test(arguments: [
+        "<a:noFill xmlns:a=\"urn:example:not-drawingml\"/>",
+        "<p:noFill/>",
+    ])
+    func `A raw fill root in the wrong namespace is refused even when the name matches`(xml: String) throws {
+        var pres = PptxWriter.createNew()
+        pres.slides[0].elements = [.shape(Shape(id: 2, name: "s", fill: .raw(xml)))]
+        #expect(pres.writeBlockers.count == 1, "\(pres.writeBlockers)")
+        let url = TemporaryPPTX.url("r3-ns")
+        defer { try? FileManager.default.removeItem(at: url) }
+        #expect(throws: PPTXError.self) { try PptxWriter.write(pres, to: url) }
+    }
+
+    @Test func `A hand-built p colon style in the PresentationML namespace still passes`() throws {
+        var shape = Shape(id: 2, name: "s")
+        shape.styleXML = "<p:style><a:lnRef idx=\"1\"><a:schemeClr val=\"accent1\"/></a:lnRef><a:fillRef idx=\"0\"><a:schemeClr val=\"accent1\"/></a:fillRef><a:effectRef idx=\"0\"><a:schemeClr val=\"accent1\"/></a:effectRef><a:fontRef idx=\"minor\"><a:schemeClr val=\"tx1\"/></a:fontRef></p:style>"
+        var pres = PptxWriter.createNew()
+        pres.slides[0].elements = [.shape(shape)]
+        #expect(pres.writeBlockers.isEmpty, "\(pres.writeBlockers)")
     }
 }
