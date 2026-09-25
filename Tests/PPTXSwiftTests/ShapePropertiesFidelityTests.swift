@@ -420,4 +420,22 @@ struct ShapePropertiesSingleValueTests {
             #expect(try children("ToArrow") == ["noFill[]()", "miter[lim=800000]()", "headEnd[]()", "tailEnd[type=triangle]()"])
         }
     }
+
+    /// 真實 fixture：`header.pptx` 的文字方塊帶明確的「無外框」
+    /// （`<a:ln w="9525"><a:noFill/><a:miter/>…`）與 `bwMode="auto"`，修正前兩者
+    /// 在往返後都消失。
+    @Test func `header pptx text boxes keep their explicit no-outline line and bwMode`() throws {
+        let source = try #require(RealFileTests.fixturePath("header.pptx"))
+        let pres = try RealFileTests.removingExpectedRelationshipBlockers(try PptxReader.read(from: source), file: "header.pptx")
+        try TemporaryPPTX.written(pres, "header-ln") { url in
+            let package = try PackageInspector(url)
+            defer { package.cleanup() }
+            let spPr = try #require(try SpPrProbePackage.writtenSpPr(named: "Text Box 7", in: package))
+            #expect(spPr.attribute(forName: "bwMode")?.stringValue == "auto")
+            let ln = try #require(try spPr.nodes(forXPath: "*[local-name()='ln']").first as? XMLElement)
+            #expect(try !ln.nodes(forXPath: "*[local-name()='noFill']").isEmpty)
+            #expect(try !ln.nodes(forXPath: "*[local-name()='miter']").isEmpty)
+            #expect(try !spPr.nodes(forXPath: "*[local-name()='effectLst']").isEmpty)
+        }
+    }
 }

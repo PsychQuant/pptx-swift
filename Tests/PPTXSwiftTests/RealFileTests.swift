@@ -24,6 +24,50 @@ struct RealFileTests {
     /// 分支條件跟被測的欄位是同一份資料而悄悄通過（Codex R1 MEDIUM）。
     static let expectedUnsupportedMediaFiles: Set<String> = ["audio.pptx"]
 
+    /// 已知含引用 relationship 的未建模元素、因此整份無法存檔的 fixture，以及
+    /// 該元素的 `cNvPr/@id`。`header.pptx`／`comment.pptx` 在投影片 1、8、11 各有
+    /// 一個內嵌 OLE 物件（`p:graphicFrame` → `p:oleObj r:id`）：
+    /// PsychQuant/pptx-swift#15 之前它被讀成沒有表格的 typed graphicFrame，存檔時
+    /// 被靜默刪除；現在讀成 `.raw`，撞上 relationship 防護而拒絕存檔。與
+    /// `expectedUnsupportedMediaFiles` 同理，分支條件用獨立宣告的清單，並斷言與
+    /// `Presentation.writeBlockers` 完全一致。
+    static let expectedRelationshipBlockedFiles: [String: Set<Int>] = [
+        "header.pptx": [584709, 681987, 676869],
+        "comment.pptx": [584709, 681987, 676869],
+    ]
+
+    /// 核對 `pres` 的 relationship 類拒絕原因與 `expectedRelationshipBlockedFiles`
+    /// 一致、`PptxWriter.write` 確實拒絕，然後回傳移除這些元素後的簡報，讓
+    /// round trip 測試照常驗證其餘內容。
+    static func removingExpectedRelationshipBlockers(_ pres: Presentation, file: String) throws -> Presentation {
+        let blockedIds = Set(pres.writeBlockers.compactMap { blocker -> Int? in
+            if case .relationshipReference = blocker.reason { return blocker.elementId }
+            return nil
+        })
+        let expected = expectedRelationshipBlockedFiles[file] ?? []
+        #expect(blockedIds == expected, "\(file)：relationship 類拒絕原因的元素 id 是 \(blockedIds)，預期 \(expected)")
+        guard !expected.isEmpty else { return pres }
+
+        let refusedURL = TemporaryPPTX.url("refused-\(file)")
+        defer { try? FileManager.default.removeItem(at: refusedURL) }
+        let error = #expect(throws: PPTXError.self, "\(file) 含引用 relationship 的 OLE 物件，寫出應拒絕") {
+            try PptxWriter.write(pres, to: refusedURL)
+        }
+        if case .writeError(let message)? = error {
+            #expect(message.contains("graphicFrame"), "\(file)：\(message)")
+        }
+        #expect(!FileManager.default.fileExists(atPath: refusedURL.path))
+
+        var writable = pres
+        for index in writable.slides.indices {
+            writable.slides[index].elements.removeAll { element in
+                if case .raw(let raw) = element { return !expected.isDisjoint(with: raw.elementIds) }
+                return false
+            }
+        }
+        return writable
+    }
+
     /// 從 Tests/Fixtures/ 取得 fixture 路徑
     static func fixturePath(_ file: String) -> URL? {
         // #file = Tests/PPTXSwiftTests/RealFileTests.swift → 往上一層到 Tests/，再進 Fixtures/
@@ -93,6 +137,7 @@ struct RealFileTests {
         #expect(flagged == expectsUnsupported,
                 "\(file.name)：containsUnsupportedMedia=\(flagged)，但預期\(expectsUnsupported ? "" : "不")應被標記")
         guard expectsUnsupported else {
+            let pres = try Self.removingExpectedRelationshipBlockers(pres, file: file.file)
             try PptxWriter.write(pres, to: tempURL)
             let fileSize = try FileManager.default.attributesOfItem(atPath: tempURL.path)[.size] as? Int ?? 0
             #expect(fileSize > 0, "\(file.name) round-trip 輸出不應為空")
