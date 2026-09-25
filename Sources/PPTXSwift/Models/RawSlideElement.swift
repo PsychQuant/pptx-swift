@@ -59,3 +59,63 @@ public struct RawSlideElement: Equatable {
         self.referencesRelationship = referencesRelationship
     }
 }
+
+// MARK: - Embedded objects
+
+/// 非表格 `p:graphicFrame` 裡內嵌的物件種類，依 `a:graphic/a:graphicData/@uri`
+/// 判斷（#12 審查 R2 L-6：拒絕存檔的訊息要讓使用者看得懂是什麼東西）。
+public enum EmbeddedObjectKind: Equatable {
+    /// 圖表：`…/drawingml/2006/chart`，或 Office 2016 起的 chartex。
+    case chart
+    /// SmartArt：`…/drawingml/2006/diagram`。
+    case smartArt
+    /// OLE 物件：`…/presentationml/2006/ole`。
+    case oleObject
+    /// 其他（或讀不到 `uri`）的內嵌物件。
+    case other(graphicDataURI: String?)
+
+    public init(graphicDataURI uri: String?) {
+        switch uri {
+        case "http://schemas.openxmlformats.org/drawingml/2006/chart",
+             "http://purl.oclc.org/ooxml/drawingml/chart",
+             "http://schemas.microsoft.com/office/drawing/2014/chartex":
+            self = .chart
+        case "http://schemas.openxmlformats.org/drawingml/2006/diagram",
+             "http://purl.oclc.org/ooxml/drawingml/diagram":
+            self = .smartArt
+        case "http://schemas.openxmlformats.org/presentationml/2006/ole",
+             "http://purl.oclc.org/ooxml/presentationml/ole":
+            self = .oleObject
+        default:
+            self = .other(graphicDataURI: uri)
+        }
+    }
+
+    /// 給人看的名稱。
+    public var displayName: String {
+        switch self {
+        case .chart: return "圖表"
+        case .smartArt: return "SmartArt 圖形"
+        case .oleObject: return "OLE 內嵌物件"
+        case .other: return "圖表、SmartArt 或 OLE 等內嵌物件"
+        }
+    }
+}
+
+public extension RawSlideElement {
+    /// 這個未建模元素是內嵌物件時的種類：它本身是 `p:graphicFrame`，或是包著
+    /// `p:graphicFrame` 的 `mc:AlternateContent`（新版 PowerPoint 常這樣包 OLE
+    /// 物件）。依子樹裡第一個 `a:graphicData/@uri` 判斷；其他未建模元素為 `nil`。
+    var embeddedObjectKind: EmbeddedObjectKind? {
+        guard let document = try? XMLDocument(xmlString: xml, options: []) else {
+            return localName == "graphicFrame" ? .other(graphicDataURI: nil) : nil
+        }
+        return withExtendedLifetime(document) {
+            let graphicData = (try? document.nodes(forXPath: "//*[local-name()='graphicData']"))?.first as? XMLElement
+            guard let graphicData else {
+                return localName == "graphicFrame" ? .other(graphicDataURI: nil) : nil
+            }
+            return EmbeddedObjectKind(graphicDataURI: graphicData.attribute(forName: "uri")?.stringValue)
+        }
+    }
+}
