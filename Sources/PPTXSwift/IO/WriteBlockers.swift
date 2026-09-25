@@ -156,7 +156,7 @@ enum WriteBlockerScan {
             return scan("群組", group.id, group.name, nil, group.passthroughFragments)
                 + group.elements.flatMap { blockers(in: $0, slideIndex: slideIndex) }
         case .raw(let raw):
-            let fragment = PassthroughFragment(location: "其原樣 XML", xml: raw.xml)
+            let fragment = PassthroughFragment(location: "原樣 XML 內", xml: raw.xml)
             let kind = "未建模元素 <\(raw.localName)>"
             if raw.referencesRelationship {
                 let attributes = (try? relationshipAttributes(in: raw.xml)).flatMap { $0.isEmpty ? nil : $0 } ?? ["r:*"]

@@ -427,8 +427,7 @@ public struct PptxReader {
                 let picture = try parsePicture(element, relationships: relationships)
                 elements.append(.picture(picture))
             case "graphicFrame":
-                let frame = try parseGraphicFrame(element)
-                elements.append(.graphicFrame(frame))
+                elements.append(try parseGraphicFrameElement(element))
             case "grpSp":
                 let group = try parseGroupShape(element, relationships: relationships)
                 elements.append(.group(group))
@@ -592,6 +591,20 @@ public struct PptxReader {
 
     // MARK: - Graphic Frame (Table)
 
+    /// 只有表格（`a:graphicData/a:tbl`）讀成 typed `.graphicFrame`；圖表、
+    /// SmartArt、OLE 物件等其他 graphicFrame 沒有 typed 模型，讀成 `.raw`
+    /// 原樣保存（PsychQuant/pptx-swift#15）。以前它們被讀成 `table == nil` 的
+    /// typed 值，寫出時 `serializeGraphicFrame` 直接略過——圖表在存檔後靜默消失。
+    /// 這些 graphicFrame 都靠 relationship 指向另一個 part（`c:chart r:id`、
+    /// `dgm:relIds r:dm…`、`p:oleObj r:id`），改走 `.raw` 後會撞上既有的拒絕
+    /// 存檔防護，而不是被默默刪除。
+    private static func parseGraphicFrameElement(_ element: XMLElement) throws -> SlideElement {
+        let tables = try element.nodes(
+            forXPath: "./*[local-name()='graphic']/*[local-name()='graphicData']/*[local-name()='tbl']")
+        guard !tables.isEmpty else { return .raw(try parseRawSlideElement(element)) }
+        return .graphicFrame(try parseGraphicFrame(element))
+    }
+
     private static func parseGraphicFrame(_ element: XMLElement) throws -> GraphicFrame {
         var frame = GraphicFrame()
 
@@ -733,7 +746,7 @@ public struct PptxReader {
             case "pic":
                 group.elements.append(.picture(try parsePicture(childElement, relationships: relationships)))
             case "graphicFrame":
-                group.elements.append(.graphicFrame(try parseGraphicFrame(childElement)))
+                group.elements.append(try parseGraphicFrameElement(childElement))
             case "grpSp":
                 group.elements.append(.group(try parseGroupShape(childElement, relationships: relationships)))
             case "cxnSp":

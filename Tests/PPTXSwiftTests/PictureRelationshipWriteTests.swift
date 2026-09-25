@@ -96,6 +96,7 @@ struct PictureRelationshipWriteTests {
         #expect(flagged == expectsUnsupported,
                 "\(file)：containsUnsupportedMedia=\(flagged)，但預期\(expectsUnsupported ? "" : "不")應被標記")
         guard expectsUnsupported else {
+            let original = try RealFileTests.removingExpectedRelationshipBlockers(original, file: file)
             try TemporaryPPTX.written(original, "rt") { url in
                 let package = try PackageInspector(url)
                 defer { package.cleanup() }
