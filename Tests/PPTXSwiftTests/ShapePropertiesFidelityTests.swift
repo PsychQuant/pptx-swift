@@ -6,6 +6,8 @@ import OOXMLSwift
 /// #11／#12 對抗式審查（VERDICT: FAIL）指出的 spPr 保真問題的回歸測試，素材是
 /// 審查者的探測簡報（`SpPrProbePackage`）：
 ///
+/// - C1：原樣片段（圖片填色等）引用 relationship 時必須拒絕存檔，且在呼叫端用
+///   typed setter 換掉那段內容後要能存檔。
 /// - H1：`spPr` 裡覆寫 `p:style` 的明確值（`<a:ln>`、非 srgb／scheme 的顏色、
 ///   色彩變換）必須保留。
 /// - H2：typed setter 必須勝過讀進來的原樣內容，不能靜默變成 no-op。
@@ -15,6 +17,69 @@ import OOXMLSwift
 struct ShapePropertiesFidelityTests {
     static let nsA = "http://schemas.openxmlformats.org/drawingml/2006/main"
     static let nsR = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+
+    // MARK: - C1：原樣片段的 relationship 引用
+
+    @Test(arguments: [true, false])
+    func `A blipFill shape refuses to save instead of pointing at the wrong image or a dangling rId`(withPictures: Bool) throws {
+        let pres = try SpPrProbePackage.read(withPictures: withPictures)
+        let url = TemporaryPPTX.url("c1-refuse")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let error = #expect(throws: PPTXError.self) { try PptxWriter.write(pres, to: url) }
+        guard case .writeError(let message)? = error else {
+            Issue.record("expected .writeError, got \(String(describing: error))")
+            return
+        }
+        #expect(message.contains("BlipFillShape"), "the message must name the offending shape: \(message)")
+        #expect(message.contains("id=20"), "the message must name the offending shape id: \(message)")
+        #expect(!FileManager.default.fileExists(atPath: url.path), "nothing may be written")
+    }
+
+    @Test(arguments: [true, false])
+    func `Replacing the picture fill with a typed fill makes the slide savable again`(withPictures: Bool) throws {
+        var pres = try SpPrProbePackage.read(withPictures: withPictures)
+        let (index, found) = try #require(pres.slides[0].shapeIndex(named: "BlipFillShape"))
+        var shape = found
+        shape.fill = .solid(color: "00FF00")
+        pres.slides[0].elements[index] = .shape(shape)
+
+        try TemporaryPPTX.written(pres, "c1-replaced") { url in
+            let package = try PackageInspector(url)
+            defer { package.cleanup() }
+            #expect(try package.integrityViolations() == [])
+            let spPr = try #require(try SpPrProbePackage.writtenSpPr(named: "BlipFillShape", in: package))
+            #expect(try spPr.nodes(forXPath: "*[local-name()='blipFill']").isEmpty)
+            let srgb = try spPr.nodes(forXPath: "*[local-name()='solidFill']/*[local-name()='srgbClr']").first as? XMLElement
+            #expect(srgb?.attribute(forName: "val")?.stringValue == "00FF00")
+        }
+    }
+
+    /// `integrityViolations()` 原本只核對「rId 有沒有定義」，抓不到「rId 有定義、
+    /// 但指向的是另一張圖」——審查實測到的錯圖情境。writer 只替 `p:pic` 自己的
+    /// `a:blip` 配置 relationship，所以寫出的投影片裡任何其他位置的 `r:` 屬性都是
+    /// 從別的 rels 帶過來的舊 Id。這裡模擬修正前 writer 的輸出：先正常寫出一張
+    /// 帶圖片的投影片（writer 把 `rId2` 配給圖片），再把一個以 `rId2` 圖片填色的
+    /// 形狀接進去——`rId2` 有定義、型別也是 image，但它不是那個形狀原本的圖。
+    @Test func `integrityViolations flags an r colon reference outside a picture blip even when the rId exists`() throws {
+        var pres = PptxWriter.createNew()
+        pres.images = [MediaFile(id: "p.png", fileName: "p.png", data: try GeneratedImage.png(width: 4, height: 4))]
+        pres.slides[0].elements = [.picture(Picture(id: 2, name: "pic", mediaFileName: "p.png"))]
+        let stray = SpPrProbePackage.shapeXML(
+            id: 20, name: "BlipFillShape",
+            spPrInner: SpPrProbePackage.rectGeometry + "<a:blipFill><a:blip r:embed=\"rId2\"/><a:stretch><a:fillRect/></a:stretch></a:blipFill>",
+            style: false)
+        let url = try UnmodeledElementTests.writtenWithRawContentSpliced(pres, rawXML: stray, label: "c1-inspector")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let package = try PackageInspector(url)
+        defer { package.cleanup() }
+        let rels = try package.relationships(of: "ppt/slides/slide1.xml")
+        #expect(rels.contains { $0.id == "rId2" && $0.type == PackageInspector.imageRelType },
+                "fixture assumption: the writer gave the picture rId2")
+        let findings = try package.integrityViolations()
+        #expect(findings.contains { $0.contains("rId2") && $0.contains("blipFill") },
+                "a shape's blipFill r:embed must be reported even though rId2 is a defined image relationship: \(findings)")
+    }
 
     // MARK: - H2：typed setter 必須勝出
 
