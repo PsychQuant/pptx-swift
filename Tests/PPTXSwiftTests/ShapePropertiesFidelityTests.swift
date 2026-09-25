@@ -438,4 +438,29 @@ struct ShapePropertiesSingleValueTests {
             #expect(try !spPr.nodes(forXPath: "*[local-name()='effectLst']").isEmpty)
         }
     }
+
+    // MARK: - #12 審查 R2 L-1：帶色彩變換的線色不是 typed 值
+
+    @Test func `A line color with a transform is not typed, so setting an opaque color drops the transform`() throws {
+        let line = "<a:ln w=\"12700\"><a:solidFill><a:srgbClr val=\"FF0000\"><a:alpha val=\"50000\"/></a:srgbClr></a:solidFill></a:ln>"
+        let extra = SpPrProbePackage.shapeXML(id: 40, name: "HalfRed", spPrInner: SpPrProbePackage.rectGeometry, style: false, line: line)
+        var pres = try SpPrProbePackage.read(withPictures: false, extraShapeTreeXML: extra)
+        let (index, found) = try #require(pres.slides[0].shapeIndex(named: "HalfRed"))
+        #expect(found.outline?.color == nil, "a transformed color is not something the typed value can reproduce")
+        var shape = found
+        shape.outline?.color = "FF0000"
+        pres.slides[0].elements[index] = .shape(shape)
+
+        try TemporaryPPTX.written(pres, "l1-alpha") { url in
+            let package = try PackageInspector(url)
+            defer { package.cleanup() }
+            let ln = try #require(try SpPrProbePackage.writtenSpPr(named: "HalfRed", in: package)?
+                .nodes(forXPath: "*[local-name()='ln']").first as? XMLElement)
+            let srgb = try #require(try ln.nodes(forXPath: "*[local-name()='solidFill']/*[local-name()='srgbClr']").first as? XMLElement)
+            #expect(srgb.attribute(forName: "val")?.stringValue == "FF0000")
+            #expect(try srgb.nodes(forXPath: "*[local-name()='alpha']").isEmpty,
+                    "an opaque red was asked for; the 50% alpha must not survive: \(ln.xmlString)")
+        }
+    }
+
 }
