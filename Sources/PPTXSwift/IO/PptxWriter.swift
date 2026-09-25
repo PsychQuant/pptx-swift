@@ -533,6 +533,12 @@ public struct PptxWriter {
 
         let xfrmAttrs = xfrmTransformAttributes(
             rotation: shape.rotation, flipHorizontal: shape.flipHorizontal, flipVertical: shape.flipVertical)
+        // p:style（PsychQuant/pptx-swift#11）: CT_Shape's sequence places it
+        // after spPr, before txBody — self-contained raw XML, spliced
+        // verbatim (same pattern as RawSlideElement.xml). `styleXML == nil`
+        // (the vast majority of shapes, and every shape before #11) writes
+        // no tag at all, not an empty one.
+        let styleXML = shape.styleXML ?? ""
 
         return """
               <p:sp>
@@ -549,6 +555,7 @@ public struct PptxWriter {
                   <a:prstGeom prst="\(shape.geometry.rawValue)"><a:avLst/></a:prstGeom>
                   \(fillXML)
                 </p:spPr>
+                \(styleXML)
                 \(textBodyXML)
               </p:sp>
 
@@ -579,6 +586,11 @@ public struct PptxWriter {
         let avLstXML = connector.adjustments.isEmpty
             ? "<a:avLst/>"
             : "<a:avLst>" + connector.adjustments.map { "<a:gd name=\"\(escapeXML($0.name))\" fmla=\"\(escapeXML($0.formula))\"/>" }.joined() + "</a:avLst>"
+        // p:style（PsychQuant/pptx-swift#11）: CT_Connector's sequence places
+        // it right after spPr, as the element's last child (no txBody to
+        // precede, unlike CT_Shape) — same self-contained-XML splice as
+        // Shape.styleXML.
+        let styleXML = connector.styleXML ?? ""
 
         return """
               <p:cxnSp>
@@ -595,6 +607,7 @@ public struct PptxWriter {
                   <a:prstGeom prst="\(connector.geometry.rawValue)">\(avLstXML)</a:prstGeom>
                   \(lnXML)
                 </p:spPr>
+                \(styleXML)
               </p:cxnSp>
 
         """

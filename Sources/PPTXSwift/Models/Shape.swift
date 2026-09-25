@@ -19,6 +19,21 @@ public struct Shape {
     public var fill: ShapeFill?
     public var outline: ShapeOutline?
     public var textBody: TextBody?
+    /// `p:style`（`CT_ShapeStyle`, ECMA-376 §19.3.1.46）的exact original XML,
+    /// self-contained (see `RawSlideElement.xml` / `PptxReader.selfContainedXMLString`
+    /// for the same mechanism): a theme style reference — `lnRef`／`fillRef`／
+    /// `effectRef`／`fontRef`, each a `<a:schemeClr>` plus a style-matrix index —
+    /// that many PowerPoint-authored shapes rely on *instead of* an explicit
+    /// `<a:ln>`／fill in `spPr` for their actual rendered color (PsychQuant/
+    /// pptx-swift#11). Kept verbatim rather than parsed into typed fields:
+    /// resolving a `schemeClr` to an actual color requires the *theme part*
+    /// (`ppt/theme/theme1.xml`'s `<a:clrScheme>`), which is a document-level
+    /// resource `Shape` has no access to — round-tripping the reference
+    /// unparsed preserves the shape's real rendered appearance without
+    /// requiring pptx-swift to become a full theme resolver. `nil` when the
+    /// shape has no `p:style` (most synthetically-constructed shapes, and any
+    /// shape whose color is fully explicit in `spPr`).
+    public var styleXML: String?
 
     public init(
         id: Int = 0,
@@ -32,7 +47,8 @@ public struct Shape {
         flipVertical: Bool = false,
         fill: ShapeFill? = nil,
         outline: ShapeOutline? = nil,
-        textBody: TextBody? = nil
+        textBody: TextBody? = nil,
+        styleXML: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -46,6 +62,7 @@ public struct Shape {
         self.fill = fill
         self.outline = outline
         self.textBody = textBody
+        self.styleXML = styleXML
     }
 }
 
