@@ -892,9 +892,12 @@ public struct PptxReader {
         var outline = ShapeOutline()
         outline.width = Int(ln.attribute(forName: "w")?.stringValue ?? "")
         let lnChildren = elementChildren(of: ln)
-        if let solidFill = lnChildren.first(where: { $0.localName == "solidFill" }),
-           let srgb = elementChildren(of: solidFill).first(where: { $0.localName == "srgbClr" }) {
-            outline.color = srgb.attribute(forName: "val")?.stringValue
+        // 線色與填色同一個原則：只有 typed 值能完整重現時才給（單一、沒有色彩
+        // 變換的 `srgbClr` 實心線）。帶 `alpha`／`lumMod` 等變換的線色若也回報
+        // `val`，呼叫端把它設成同一個值想得到不透明色時，會因為「與讀檔時相同」
+        // 被視為沒改，變換仍然保留（#12 審查 R2 L-1）。
+        if case .solid(let color)? = parseFill(in: ln) {
+            outline.color = color
         }
         // 線條端點（`a:headEnd`／`a:tailEnd`）：任何 `a:ln` 上 schema 都允許，
         // 最常見於連接線（`p:cxnSp`）表示箭頭方向（PsychQuant/pptx-swift#9）。
