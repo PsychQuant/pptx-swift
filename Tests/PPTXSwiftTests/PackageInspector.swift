@@ -108,6 +108,33 @@ struct PackageInspector {
             .filter { !$0.isEmpty }
     }
 
+    /// `r:` attributes of a part that are not on a picture's own blip (rule 8
+    /// of `integrityViolations`), each described with the path of local
+    /// names from the nearest shape-tree child down to the attribute's
+    /// element, e.g. `sp/spPr/blipFill/blip r:embed="rId2"`. Checked here
+    /// independently of `PptxWriter.strayRelationshipReferences`, so the
+    /// writer's own guard cannot vouch for itself.
+    func strayRelationshipReferences(in partName: String) throws -> [String] {
+        // The document must outlive the walk: an attribute node returned by
+        // XPath loses its `parent` once the owning XMLDocument is released,
+        // and a temporary document is released right after `nodes(forXPath:)`.
+        let document = try xml(partName)
+        return try withExtendedLifetime(document) { try document.nodes(forXPath: "//@*").compactMap { attribute -> String? in
+            guard attribute.uri == Self.nsR, let owner = attribute.parent as? XMLElement else { return nil }
+            var path: [String] = []
+            var current: XMLElement? = owner
+            while let element = current, let name = element.localName, name != "spTree" {
+                path.insert(name, at: 0)
+                current = element.parent as? XMLElement
+            }
+            let onPictureBlip = path.count >= 3
+                && path.suffix(3) == ["pic", "blipFill", "blip"]
+                && path.dropLast(3).allSatisfy { $0 == "grpSp" }
+            guard !onPictureBlip else { return nil }
+            return "\(path.joined(separator: "/")) \(attribute.name ?? "")=\"\(attribute.stringValue ?? "")\""
+        } }
+    }
+
     /// `r:embed` values of the `a:blip` elements in a part, in document order.
     func blipEmbeds(in partName: String) throws -> [String?] {
         try xml(partName).nodes(forXPath: "//*[local-name()='blip']").map { node in
@@ -174,7 +201,15 @@ struct PackageInspector {
     /// 5. a picture `r:embed` whose relationship is not an image relationship;
     /// 6. a media part ImageIO identifies whose content type is not that
     ///    format's MIME type;
-    /// 7. an `a:srcRect` edge that is not an integer in the `xsd:int` range.
+    /// 7. an `a:srcRect` edge that is not an integer in the `xsd:int` range;
+    /// 8. an `r:` reference in a slide anywhere other than a picture's own
+    ///    `p:pic/p:blipFill/a:blip` (under `p:spTree` and `p:grpSp` only).
+    ///    `PptxWriter` allocates relationships for nothing else, so any other
+    ///    `r:` attribute in its output was carried over from a source rels
+    ///    part that no longer exists — rule 4 cannot see it when the old Id
+    ///    happens to name a relationship the writer allocated for something
+    ///    else (#12 review C1: a picture-filled shape showed a different
+    ///    picture after a round trip).
     func integrityViolations() throws -> [String] {
         var findings: [String] = []
         let parts = try partNames()
@@ -213,6 +248,9 @@ struct PackageInspector {
             let byId = Dictionary(rels.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             for reference in try relationshipReferences(in: part) where byId[reference] == nil {
                 findings.append("\(part) references undefined relationship \(reference)")
+            }
+            for stray in try strayRelationshipReferences(in: part) {
+                findings.append("\(part) \(stray) is not on a picture's own blip")
             }
             for embed in try blipEmbeds(in: part).compactMap({ $0 }) {
                 if let rel = byId[embed], rel.type != Self.imageRelType {

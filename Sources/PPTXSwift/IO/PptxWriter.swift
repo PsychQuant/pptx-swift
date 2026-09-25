@@ -56,54 +56,68 @@ public struct PptxWriter {
 
     /// 拒絕寫出無法保留其內容的投影片，而不是默默遺失。
     ///
-    /// - Throws: `PPTXError.writeError` when a slide has embedded or linked
-    ///   media (any DrawingML `EG_Media` element, usually paired with a
-    ///   `p:timing` play trigger) or a transition sound (`p:snd`): the model
-    ///   does not carry that structure, so writing would silently drop
-    ///   playback (PsychQuant/pptx-swift#5). Also throws when a slide has a
-    ///   `.raw` (unmodeled) element that references a relationship (`r:id`,
-    ///   `r:embed`, `r:link`, …): see the decision note below
-    ///   (PsychQuant/pptx-swift#9).
+    /// - Throws: `PPTXError.writeError` with the first
+    ///   `Presentation.writeBlockers` entry's description: a slide with
+    ///   embedded or linked media or a transition sound (#5); passthrough XML
+    ///   — a `.raw` element (#9) or a raw `spPr`／`grpSpPr`／`p:style`
+    ///   fragment (#12 review C1) — that references a relationship; a raw
+    ///   fragment that does not parse; a preset geometry whose `prst` is a
+    ///   `ShapeGeometry` sentinel. See `WriteBlocker` for why each is refused.
+    ///
+    /// relationship 引用一律拒絕、不嘗試重新配號：pptx-swift 每張投影片的 rels
+    /// 都從頭配置（`SlideImageRelationships` 從 rId2 起算，#1 既有設計），無法
+    /// 安全地知道原始 rId 在新配置下是否仍指向同一個 part、或撞上新配的 rId
+    /// ——#12 審查實測到後者：形狀的圖片填色 `rId2` 被 writer 重新配給同一張
+    /// 投影片上的圖片，結果形狀顯示成另一張圖。重新配號並改寫原樣 XML 是
+    /// PsychQuant/pptx-swift#16 的範圍。
     private static func validateSupportedContent(_ presentation: Presentation) throws {
-        for (index, slide) in presentation.slides.enumerated() {
-            if slide.containsUnsupportedMedia {
-                throw PPTXError.writeError(
-                    "投影片 \(index + 1) 含音訊、影片或換場音效：pptx-swift 尚未建模播放觸發、時間軸（p:timing）與換場音效，寫出會遺失播放能力，拒絕存檔"
-                )
-            }
-            // 未建模子元素（mc:AlternateContent／p:contentPart／其他）本身用
-            // raw XML 原樣寫回（見 serializeElement 的 .raw case），但若它
-            // 引用了 relationship，pptx-swift 的 relationship 配置是「整份
-            // 投影片重新配置」（SlideImageRelationships 從 rId2 起算，#1 既有
-            // 設計），無法安全地知道原始 rId 在新配置下是否仍指向同一個
-            // relationship、或撞上新配的 rId。與其冒險寫出一個 rId 失效或
-            // 指錯 part 的檔案，選擇明確拒絕——跟 #5 對音訊／影片的選擇一致
-            // （見 issue #9「決定與理由」的完整討論：曾考慮重新配置引用的
-            // relationship 並改寫 raw XML 裡的 rId，但那需要在 raw 文字裡精準
-            // 定位並替換屬性值，複雜度與風險都遠超過這張 issue 的範圍）。
-            if let offending = firstUnwritableRawSlideElement(in: slide.elements) {
-                throw PPTXError.writeError(
-                    "投影片 \(index + 1) 含未建模的子元素 <\(offending.localName)> 引用了 relationship："
-                        + "pptx-swift 無法安全地確保該 rId 在重新配置後仍有效、且不與新配的 rId 衝突，拒絕存檔"
-                )
-            }
+        if let blocker = presentation.writeBlockers.first {
+            throw PPTXError.writeError(blocker.description)
         }
     }
 
-    /// The first `.raw` element (at any nesting depth) whose subtree
-    /// references a relationship, or nil.
-    private static func firstUnwritableRawSlideElement(in elements: [SlideElement]) -> RawSlideElement? {
-        for element in elements {
-            switch element {
-            case .raw(let raw) where raw.referencesRelationship:
-                return raw
-            case .group(let group):
-                if let found = firstUnwritableRawSlideElement(in: group.elements) { return found }
-            default:
-                continue
+    /// 寫出的投影片 XML 裡，所有**不在** writer 自己配置的位置上的
+    /// relationships 命名空間屬性（`writeBlockers` 的最後防線）。writer 只替
+    /// `p:pic/p:blipFill/a:blip` 的 `r:embed`／`r:link` 配置 relationship，而
+    /// 且那個 `p:pic` 到 `p:spTree` 之間只會有 writer 自己寫的 `p:grpSp`；
+    /// 其他任何位置的 `r:` 屬性都是從原始檔帶過來的舊 rId。`writeBlockers`
+    /// 已經擋掉所有已知的原樣片段，這裡在原樣欄位日後擴充卻忘了登記時兜底，
+    /// 確保 writer 永遠不會寫出指錯 part 的 rId。
+    static func strayRelationshipReferences(inSlideXML xml: String) throws -> [String] {
+        let document: XMLDocument
+        do {
+            document = try XMLDocument(xmlString: xml, options: [])
+        } catch {
+            throw PPTXError.writeError("寫出的投影片 XML 不是合法的 XML（\(error.localizedDescription)），拒絕存檔")
+        }
+        // The document must stay alive for the whole walk: an attribute node
+        // returned by XPath loses its `parent` once the owning XMLDocument is
+        // released, and Swift may release a local right after its last use.
+        return try withExtendedLifetime(document) {
+            var strays: [String] = []
+            for node in try document.nodes(forXPath: "//@*") {
+                guard WriteBlockerScan.relationshipNamespaces.contains(node.uri ?? "") else { continue }
+                let owner = node.parent as? XMLElement
+                if let owner, isWriterOwnedPictureBlip(owner) { continue }
+                strays.append("<\(owner?.name ?? "?")> \(node.name ?? "?")=\"\(node.stringValue ?? "")\"")
+            }
+            return strays
+        }
+    }
+
+    private static func isWriterOwnedPictureBlip(_ blip: XMLElement) -> Bool {
+        guard blip.localName == "blip",
+              let blipFill = blip.parent as? XMLElement, blipFill.localName == "blipFill",
+              let pic = blipFill.parent as? XMLElement, pic.localName == "pic" else { return false }
+        var ancestor = pic.parent as? XMLElement
+        while let element = ancestor {
+            switch element.localName {
+            case "spTree": return true
+            case "grpSp": ancestor = element.parent as? XMLElement
+            default: return false
             }
         }
-        return nil
+        return false
     }
 
     /// Normalizes an `ST_Angle` value (60,000ths of a degree) into the
@@ -407,6 +421,12 @@ public struct PptxWriter {
         \(transitionXML)</p:sld>
         """
 
+        let strays = try strayRelationshipReferences(inSlideXML: xml)
+        guard strays.isEmpty else {
+            throw PPTXError.writeError(
+                "投影片 \(index + 1) 的輸出含有不是 pptx-swift 配置的 relationship 引用（\(strays.joined(separator: "、"))），拒絕存檔"
+            )
+        }
         try xml.write(to: slidesDir.appendingPathComponent("slide\(index + 1).xml"), atomically: true, encoding: .utf8)
 
         // Slide relationships：slideLayout + 此投影片上每個被引用的 media part 各一個 image
@@ -458,8 +478,8 @@ public struct PptxWriter {
             // 原樣寫回已經是 self-contained 的原始 XML（`RawSlideElement.xml`，見
             // `PptxReader.selfContainedXMLString`），不重新組裝、不動 nextId
             // （沒有型別化的 id 欄位可以配置）。relationship 引用的安全性已在
-            // `validateSupportedContent` 把關，這裡不會走到不安全的情況
-            // （PsychQuant/pptx-swift#9）。
+            // `validateSupportedContent`（`Presentation.writeBlockers`）把關，
+            // 這裡不會走到不安全的情況（PsychQuant/pptx-swift#9）。
             return "      \(raw.xml)\n"
         }
     }
