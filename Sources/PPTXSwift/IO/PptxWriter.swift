@@ -435,7 +435,7 @@ public struct PptxWriter {
     ) throws -> String {
         switch element {
         case .shape(let shape):
-            return serializeShape(shape, nextId: &nextId)
+            return try serializeShape(shape, nextId: &nextId)
         case .picture(let picture):
             // CT_Blip's r:embed and r:link are independent optional attributes
             // (ECMA-376 Part 1 §20.1.8.13), not alternatives: a picture linked
@@ -453,7 +453,7 @@ public struct PptxWriter {
         case .group(let group):
             return try serializeGroupShape(group, nextId: &nextId, imageRels: &imageRels)
         case .connector(let connector):
-            return serializeConnector(connector, nextId: &nextId)
+            return try serializeConnector(connector, nextId: &nextId)
         case .raw(let raw):
             // 原樣寫回已經是 self-contained 的原始 XML（`RawSlideElement.xml`，見
             // `PptxReader.selfContainedXMLString`），不重新組裝、不動 nextId
@@ -485,10 +485,9 @@ public struct PptxWriter {
         // CT_GroupShapeProperties (#12): xfrm?, EG_FillProperties?,
         // EG_EffectProperties?, scene3d?, extLst? — a smaller sequence than
         // CT_ShapeProperties (no geometry choice, no ln, no sp3d), so this
-        // does not share `spPrTailExtrasXML` with Shape/Connector. `rawFillXML`
-        // has no typed counterpart to be mutually exclusive with — `GroupShape`
-        // has never modeled a typed fill.
-        let extrasXML = [group.rawFillXML, group.effectXML, group.scene3dXML, group.extLstXML]
+        // does not share `spPrTailExtrasXML` with Shape/Connector.
+        let fillXML = try serializeFill(group.fill, elementId: id)
+        let extrasXML = [fillXML.isEmpty ? nil : fillXML, group.effectXML, group.scene3dXML, group.extLstXML]
             .compactMap { $0 }.joined(separator: "\n                  ")
 
         return """
@@ -498,7 +497,7 @@ public struct PptxWriter {
                   <p:cNvGrpSpPr/>
                   <p:nvPr/>
                 </p:nvGrpSpPr>
-                <p:grpSpPr>
+                <p:grpSpPr\(bwModeAttribute(group.blackWhiteMode))>
                   <a:xfrm\(xfrmAttrs)>
                     <a:off x="\(group.position.x)" y="\(group.position.y)"/>
                     <a:ext cx="\(group.size.width)" cy="\(group.size.height)"/>
@@ -512,7 +511,7 @@ public struct PptxWriter {
         """
     }
 
-    private static func serializeShape(_ shape: Shape, nextId: inout Int) -> String {
+    private static func serializeShape(_ shape: Shape, nextId: inout Int) throws -> String {
         let id = shape.id > 0 ? shape.id : nextId
         nextId = max(nextId, id + 1)
 
@@ -521,30 +520,15 @@ public struct PptxWriter {
             phXML = "<p:ph type=\"\(ph.rawValue)\"/>"
         }
 
-        // Geometry — EG_Geometry choice (PsychQuant/pptx-swift#12):
-        // `customGeometryXML` (raw `<a:custGeom>`) takes priority and
-        // *replaces* `<a:prstGeom>` entirely — writing both is invalid XML
-        // (the schema only allows one).
-        let geometryXML = shape.customGeometryXML
-            ?? "<a:prstGeom prst=\"\(shape.geometry.rawValue)\"><a:avLst/></a:prstGeom>"
-
-        // Fill — EG_FillProperties choice: `rawFillXML` (raw `<a:gradFill>`／
-        // `<a:blipFill>`／`<a:pattFill>`／`<a:grpFill>`) takes priority over
-        // the typed `fill`, same mutual-exclusivity reasoning as geometry.
-        var typedFillXML = ""
-        if let fill = shape.fill {
-            switch fill {
-            case .solid(let color):
-                typedFillXML = "<a:solidFill><a:srgbClr val=\"\(color)\"/></a:solidFill>"
-            case .schemeColor(let name):
-                typedFillXML = "<a:solidFill><a:schemeClr val=\"\(name)\"/></a:solidFill>"
-            case .noFill:
-                typedFillXML = "<a:noFill/>"
-            case .gradient:
-                break
-            }
-        }
-        let fillXML = shape.rawFillXML ?? typedFillXML
+        // EG_Geometry / EG_FillProperties are each a single value (typed or
+        // raw) on the model — a typed setter replaces a raw value outright,
+        // so the writer never has to choose between two (#12 review H2).
+        let geometryXML = serializeGeometry(shape.geometryDefinition)
+        let fillXML = try serializeFill(shape.fill, elementId: id)
+        // `<a:ln>` (#12 review H1): before this `Shape`'s outline was read but
+        // never written, so an explicit `<a:ln><a:noFill/>` next to a
+        // `p:style` `lnRef` came back as the theme's outline.
+        let lnXML = try shape.outline.map(serializeLine) ?? ""
 
         var textBodyXML = ""
         if let textBody = shape.textBody {
@@ -573,13 +557,14 @@ public struct PptxWriter {
                   <p:cNvSpPr/>
                   <p:nvPr>\(phXML)</p:nvPr>
                 </p:nvSpPr>
-                <p:spPr>
+                <p:spPr\(bwModeAttribute(shape.blackWhiteMode))>
                   <a:xfrm\(xfrmAttrs)>
                     <a:off x="\(shape.position.x)" y="\(shape.position.y)"/>
                     <a:ext cx="\(shape.size.width)" cy="\(shape.size.height)"/>
                   </a:xfrm>
                   \(geometryXML)
                   \(fillXML)
+                  \(lnXML)
                   \(tailXML)
                 </p:spPr>
                 \(styleXML)
@@ -587,6 +572,52 @@ public struct PptxWriter {
               </p:sp>
 
         """
+    }
+
+    /// ` bwMode="…"` for an `spPr`／`grpSpPr` opening tag, or "" when absent.
+    private static func bwModeAttribute(_ mode: String?) -> String {
+        mode.map { " bwMode=\"\(escapeXML($0))\"" } ?? ""
+    }
+
+    /// `EG_Geometry`: `<a:prstGeom>` with its original `prst` string and
+    /// adjustments (`writeBlockers` has already refused the sentinel `prst`
+    /// values), or the verbatim `<a:custGeom>`. An empty adjustment list is
+    /// the literal `<a:avLst/>`, byte-identical to the output before
+    /// adjustments were kept.
+    private static func serializeGeometry(_ geometry: GeometryDefinition) -> String {
+        switch geometry {
+        case .custom(let xml):
+            return xml
+        case .preset(let prst, let adjustments):
+            let avLstXML = adjustments.isEmpty
+                ? "<a:avLst/>"
+                : "<a:avLst>" + adjustments.map { "<a:gd name=\"\(escapeXML($0.name))\" fmla=\"\(escapeXML($0.formula))\"/>" }.joined() + "</a:avLst>"
+            return "<a:prstGeom prst=\"\(escapeXML(prst))\">\(avLstXML)</a:prstGeom>"
+        }
+    }
+
+    /// `EG_FillProperties`, or "" when there is no fill.
+    ///
+    /// - Throws: `PPTXError.writeError` for a `.gradient` with fewer than two
+    ///   stops (`a:gsLst` requires at least two).
+    static func serializeFill(_ fill: ShapeFill?, elementId: Int) throws -> String {
+        guard let fill else { return "" }
+        switch fill {
+        case .solid(let color):
+            return "<a:solidFill><a:srgbClr val=\"\(escapeXML(color))\"/></a:solidFill>"
+        case .schemeColor(let name):
+            return "<a:solidFill><a:schemeClr val=\"\(escapeXML(name))\"/></a:solidFill>"
+        case .noFill:
+            return "<a:noFill/>"
+        case .gradient(let stops):
+            guard stops.count >= 2 else {
+                throw PPTXError.writeError("元素 id=\(elementId) 的漸層填色只有 \(stops.count) 個色標，a:gsLst 至少需要兩個，無法寫出")
+            }
+            let stopsXML = stops.map { "<a:gs pos=\"\($0.position)\"><a:srgbClr val=\"\(escapeXML($0.color))\"/></a:gs>" }.joined()
+            return "<a:gradFill><a:gsLst>\(stopsXML)</a:gsLst></a:gradFill>"
+        case .raw(let xml):
+            return xml
+        }
     }
 
     /// `<a:effectLst>`／`<a:effectDag>`, `<a:scene3d>`, `<a:sp3d>`,
@@ -606,7 +637,7 @@ public struct PptxWriter {
     /// `p:cxnSp`（PsychQuant/pptx-swift#9）：`spPr` 用與 `p:sp`／`p:pic` 相同的
     /// `xfrmTransformAttributes` 共用 helper；連接線特有的只有 `p:cNvCxnSpPr`
     /// 底下的 `a:stCxn`／`a:endCxn` 與線條端點（`a:ln` 的 `headEnd`／`tailEnd`）。
-    private static func serializeConnector(_ connector: Connector, nextId: inout Int) -> String {
+    private static func serializeConnector(_ connector: Connector, nextId: inout Int) throws -> String {
         let id = connector.id > 0 ? connector.id : nextId
         nextId = max(nextId, id + 1)
 
@@ -620,21 +651,13 @@ public struct PptxWriter {
 
         let xfrmAttrs = xfrmTransformAttributes(
             rotation: connector.rotation, flipHorizontal: connector.flipHorizontal, flipVertical: connector.flipVertical)
-        let lnXML = connector.outline.map(serializeConnectorLine) ?? ""
-        // 沒有調整值時寫空 <a:avLst/>，跟 #9 之前逐位元組相同；有的話原樣
-        // 寫回每一個 <a:gd>（Codex round 1 review：先前永遠寫空，會靜默丟棄
-        // 讀進來的調整值）。
-        let avLstXML = connector.adjustments.isEmpty
-            ? "<a:avLst/>"
-            : "<a:avLst>" + connector.adjustments.map { "<a:gd name=\"\(escapeXML($0.name))\" fmla=\"\(escapeXML($0.formula))\"/>" }.joined() + "</a:avLst>"
-        // Geometry — EG_Geometry choice (#12): `customGeometryXML` replaces
-        // `<a:prstGeom>` (and its adjustments, meaningless for a custGeom
-        // path) entirely.
-        let geometryXML = connector.customGeometryXML
-            ?? "<a:prstGeom prst=\"\(connector.geometry.rawValue)\">\(avLstXML)</a:prstGeom>"
-        // rawFillXML (#12): Connector has no typed fill to be "mutually
-        // exclusive" with — see the doc comment on `Connector.rawFillXML`.
-        let fillXML = connector.rawFillXML ?? ""
+        // Geometry／fill／line: same single-value (typed or raw) handling as
+        // `serializeShape` (#12 review H1／H2／L1). Adjustments ride on
+        // `.preset`, so an empty list still writes the literal `<a:avLst/>`
+        // exactly as before #9.
+        let geometryXML = serializeGeometry(connector.geometryDefinition)
+        let fillXML = try serializeFill(connector.fill, elementId: id)
+        let lnXML = try connector.outline.map(serializeLine) ?? ""
         // p:style（PsychQuant/pptx-swift#11）: CT_Connector's sequence places
         // it right after spPr, as the element's last child (no txBody to
         // precede, unlike CT_Shape) — same self-contained-XML splice as
@@ -651,7 +674,7 @@ public struct PptxWriter {
                   <p:cNvCxnSpPr>\(cNvCxnSpPrXML)</p:cNvCxnSpPr>
                   <p:nvPr/>
                 </p:nvCxnSpPr>
-                <p:spPr>
+                <p:spPr\(bwModeAttribute(connector.blackWhiteMode))>
                   <a:xfrm\(xfrmAttrs)>
                     <a:off x="\(connector.position.x)" y="\(connector.position.y)"/>
                     <a:ext cx="\(connector.size.width)" cy="\(connector.size.height)"/>
@@ -667,24 +690,113 @@ public struct PptxWriter {
         """
     }
 
-    /// `<a:ln>`（ECMA-376 `CT_LineProperties`，child order: fill, then
-    /// `headEnd`／`tailEnd`）：width／color／兩個端點皆為可選，全部缺席時
-    /// 省略整個 `<a:ln>` 標籤——跟 `xfrmTransformAttributes` 同一個「沒有值
-    /// 就不寫屬性／標籤」慣例。
-    private static func serializeConnectorLine(_ outline: ShapeOutline) -> String {
+    /// `<a:ln>` for a `Shape`／`Connector` outline (see `ShapeOutline`):
+    ///
+    /// - read from a file, no typed field changed → the original XML verbatim;
+    /// - read from a file, some typed fields changed → the original XML with
+    ///   only those parts rewritten (`mergedLine`), so unmodeled content
+    ///   (dash, join, cap, theme color…) survives a width or color edit;
+    /// - built in code (no original XML) → assembled from the typed fields.
+    private static func serializeLine(_ outline: ShapeOutline) throws -> String {
+        guard let source = outline.source else { return serializeTypedLine(outline) }
+        let unchanged = outline.width == source.width && outline.color == source.color
+            && outline.headEnd == source.headEnd && outline.tailEnd == source.tailEnd
+        return unchanged ? source.xml : try mergedLine(outline, source: source)
+    }
+
+    /// `CT_LineProperties` child order: line fill (noFill／solidFill／gradFill／
+    /// pattFill), dash (prstDash／custDash), join (round／bevel／miter),
+    /// headEnd, tailEnd, extLst.
+    private static let lineChildRank: [String: Int] = [
+        "noFill": 0, "solidFill": 0, "gradFill": 0, "pattFill": 0,
+        "prstDash": 1, "custDash": 1,
+        "round": 2, "bevel": 2, "miter": 2,
+        "headEnd": 3, "tailEnd": 4, "extLst": 5,
+    ]
+
+    /// The original `<a:ln>` with only the typed fields that differ from what
+    /// was read rewritten in place: `w`, the line fill (replaced by a solid
+    /// `srgbClr`, or removed when `color` became nil), `headEnd`, `tailEnd`.
+    private static func mergedLine(_ outline: ShapeOutline, source: ShapeOutline.Source) throws -> String {
+        let document = try XMLDocument(xmlString: source.xml, options: [])
+        defer { withExtendedLifetime(document) {} }
+        guard let ln = document.rootElement() else {
+            throw PPTXError.writeError("外框的原始 XML 沒有根元素，無法寫出")
+        }
+        let nsA = "http://schemas.openxmlformats.org/drawingml/2006/main"
+        let prefix = ln.prefix ?? ""
+        func qualified(_ localName: String) -> String { prefix.isEmpty ? localName : "\(prefix):\(localName)" }
+        func element(_ localName: String, attributes: [(String, String)] = [], children: [XMLElement] = []) -> XMLElement {
+            let result = XMLElement(name: qualified(localName), uri: nsA)
+            for (name, value) in attributes {
+                result.addAttribute(XMLNode.attribute(withName: name, stringValue: value) as! XMLNode)
+            }
+            children.forEach(result.addChild)
+            return result
+        }
+        /// Removes every child whose local name is in `localNames`, then
+        /// inserts `replacement` (if any) before the first child that comes
+        /// later in `CT_LineProperties`'s sequence.
+        func replaceChild(_ localNames: Set<String>, rank: Int, with replacement: XMLElement?) {
+            for (index, child) in (ln.children ?? []).enumerated().reversed() {
+                if let el = child as? XMLElement, localNames.contains(el.localName ?? "") { ln.removeChild(at: index) }
+            }
+            guard let replacement else { return }
+            let insertAt = (ln.children ?? []).firstIndex { child in
+                guard let el = child as? XMLElement else { return false }
+                return (lineChildRank[el.localName ?? ""] ?? Int.max) > rank
+            } ?? ln.childCount
+            ln.insertChild(replacement, at: insertAt)
+        }
+        func lineEnd(_ localName: String, _ style: LineEndStyle?) -> XMLElement? {
+            guard let style else { return nil }
+            let attributes = [("type", style.type), ("w", style.width), ("len", style.length)]
+                .compactMap { name, value in value.map { (name, $0) } }
+            return element(localName, attributes: attributes)
+        }
+
+        if outline.width != source.width {
+            if let width = outline.width {
+                if let existing = ln.attribute(forName: "w") {
+                    existing.stringValue = "\(width)"
+                } else {
+                    ln.addAttribute(XMLNode.attribute(withName: "w", stringValue: "\(width)") as! XMLNode)
+                }
+            } else {
+                ln.removeAttribute(forName: "w")
+            }
+        }
+        if outline.color != source.color {
+            let solid = outline.color.map { element("solidFill", children: [element("srgbClr", attributes: [("val", $0)])]) }
+            replaceChild(["noFill", "solidFill", "gradFill", "pattFill"], rank: 0, with: solid)
+        }
+        if outline.headEnd != source.headEnd {
+            replaceChild(["headEnd"], rank: 3, with: lineEnd("headEnd", outline.headEnd))
+        }
+        if outline.tailEnd != source.tailEnd {
+            replaceChild(["tailEnd"], rank: 4, with: lineEnd("tailEnd", outline.tailEnd))
+        }
+        return ln.xmlString
+    }
+
+    /// `<a:ln>` assembled from typed fields only (an outline built in code):
+    /// width／color／both line ends are each optional; with none of them the
+    /// whole tag is omitted — the same "no value, no attribute／tag"
+    /// convention as `xfrmTransformAttributes`.
+    private static func serializeTypedLine(_ outline: ShapeOutline) -> String {
         var attrs = ""
         if let width = outline.width { attrs += " w=\"\(width)\"" }
 
         var children = ""
         if let color = outline.color {
-            children += "<a:solidFill><a:srgbClr val=\"\(color)\"/></a:solidFill>"
+            children += "<a:solidFill><a:srgbClr val=\"\(escapeXML(color))\"/></a:solidFill>"
         }
         func lineEndXML(_ tag: String, _ style: LineEndStyle?) -> String {
             guard let style else { return "" }
             var lineAttrs = ""
-            if let type = style.type { lineAttrs += " type=\"\(type)\"" }
-            if let width = style.width { lineAttrs += " w=\"\(width)\"" }
-            if let length = style.length { lineAttrs += " len=\"\(length)\"" }
+            if let type = style.type { lineAttrs += " type=\"\(escapeXML(type))\"" }
+            if let width = style.width { lineAttrs += " w=\"\(escapeXML(width))\"" }
+            if let length = style.length { lineAttrs += " len=\"\(escapeXML(length))\"" }
             return "<a:\(tag)\(lineAttrs)/>"
         }
         children += lineEndXML("headEnd", outline.headEnd)

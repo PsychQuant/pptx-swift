@@ -26,18 +26,20 @@ public struct GroupShape {
     /// 是否沿水平軸垂直翻轉（`a:xfrm` 的 `flipV`）。
     public var flipVertical: Bool
     public var elements: [SlideElement]
-    /// `CT_GroupShapeProperties`（`p:grpSpPr`）子元素 pptx-swift 沒有型別化模型
-    /// 的部分，原樣保存、寫出時放回 schema 正確位置（PsychQuant/pptx-swift#12）。
-    /// `grpSpPr` 的 schema 序列是 `xfrm?, EG_FillProperties?, EG_EffectProperties?,
-    /// scene3d?, extLst?`——跟 `CT_ShapeProperties`（`Shape`／`Connector` 用的
-    /// 那個）不同：**沒有** `EG_Geometry`（不能是 custGeom／prstGeom，群組本身
-    /// 沒有外框路徑）也**沒有** `a:ln`／`a:sp3d`。`GroupShape` 目前完全沒有型別化
-    /// 的 `fill` 欄位，所以 `rawFillXML` 是單純原樣保留，不像 `Shape.rawFillXML`
-    /// 有互斥的 typed 版本。
-    public var rawFillXML: String?
+    /// `p:grpSpPr` 的填色（`EG_FillProperties`），語意與 `Shape.fill` 相同
+    /// （typed 只收能完整重現的情形，其餘 `.raw`）。群組的填色只有在子形狀用
+    /// `<a:grpFill>` 時才看得到。
+    public var fill: ShapeFill?
+    /// `CT_GroupShapeProperties`（`p:grpSpPr`）裡沒有 typed 對應的子元素，原樣
+    /// 保存、寫出時放回 schema 正確位置（PsychQuant/pptx-swift#12）。`grpSpPr`
+    /// 的 schema 序列是 `xfrm?, EG_FillProperties?, EG_EffectProperties?,
+    /// scene3d?, extLst?`——跟 `CT_ShapeProperties` 不同：**沒有** `EG_Geometry`
+    /// 也**沒有** `a:ln`／`a:sp3d`。
     public var effectXML: String?
     public var scene3dXML: String?
     public var extLstXML: String?
+    /// `p:grpSpPr` 的 `bwMode` 屬性，語意與 `Shape.blackWhiteMode` 相同。
+    public var blackWhiteMode: String?
 
     public init(
         id: Int = 0,
@@ -50,10 +52,11 @@ public struct GroupShape {
         flipHorizontal: Bool = false,
         flipVertical: Bool = false,
         elements: [SlideElement] = [],
-        rawFillXML: String? = nil,
+        fill: ShapeFill? = nil,
         effectXML: String? = nil,
         scene3dXML: String? = nil,
-        extLstXML: String? = nil
+        extLstXML: String? = nil,
+        blackWhiteMode: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -65,10 +68,11 @@ public struct GroupShape {
         self.flipHorizontal = flipHorizontal
         self.flipVertical = flipVertical
         self.elements = elements
-        self.rawFillXML = rawFillXML
+        self.fill = fill
         self.effectXML = effectXML
         self.scene3dXML = scene3dXML
         self.extLstXML = extLstXML
+        self.blackWhiteMode = blackWhiteMode
     }
 
     /// 取得群組內所有文字

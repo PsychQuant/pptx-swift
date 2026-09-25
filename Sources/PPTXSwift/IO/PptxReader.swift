@@ -473,10 +473,10 @@ public struct PptxReader {
         if let spPr = try element.nodes(forXPath: "./*[local-name()='spPr']").first as? XMLElement {
             parseShapeProperties(spPr, position: &shape.position, size: &shape.size,
                                rotation: &shape.rotation, flipHorizontal: &shape.flipHorizontal, flipVertical: &shape.flipVertical,
-                               fill: &shape.fill, outline: &shape.outline, geometry: &shape.geometry,
-                               customGeometryXML: &shape.customGeometryXML, rawFillXML: &shape.rawFillXML,
+                               fill: &shape.fill, outline: &shape.outline, geometry: &shape.geometryDefinition,
                                effectXML: &shape.effectXML, scene3dXML: &shape.scene3dXML,
-                               sp3dXML: &shape.sp3dXML, extLstXML: &shape.extLstXML)
+                               sp3dXML: &shape.sp3dXML, extLstXML: &shape.extLstXML,
+                               blackWhiteMode: &shape.blackWhiteMode)
         }
 
         // Theme style reference (p:style — PsychQuant/pptx-swift#11), kept
@@ -539,19 +539,18 @@ public struct PptxReader {
         if let spPr = try element.nodes(forXPath: "./*[local-name()='spPr']").first as? XMLElement {
             var fill: ShapeFill? = nil
             var outline: ShapeOutline? = nil
-            var geometry: ShapeGeometry = .rect
-            var customGeometryXML: String? = nil
-            var rawFillXML: String? = nil
+            var geometry = GeometryDefinition.preset(ShapeGeometry.rect.rawValue, adjustments: [])
             var effectXML: String? = nil
             var scene3dXML: String? = nil
             var sp3dXML: String? = nil
             var extLstXML: String? = nil
+            var blackWhiteMode: String? = nil
             parseShapeProperties(spPr, position: &picture.position, size: &picture.size,
                                rotation: &picture.rotation, flipHorizontal: &picture.flipHorizontal, flipVertical: &picture.flipVertical,
                                fill: &fill, outline: &outline, geometry: &geometry,
-                               customGeometryXML: &customGeometryXML, rawFillXML: &rawFillXML,
                                effectXML: &effectXML, scene3dXML: &scene3dXML,
-                               sp3dXML: &sp3dXML, extLstXML: &extLstXML)
+                               sp3dXML: &sp3dXML, extLstXML: &extLstXML,
+                               blackWhiteMode: &blackWhiteMode)
         }
 
         return picture
@@ -705,16 +704,11 @@ public struct PptxReader {
             // CT_GroupShapeProperties: xfrm?, EG_FillProperties?,
             // EG_EffectProperties?, scene3d?, extLst? — a smaller, different
             // sequence than CT_ShapeProperties (no geometry choice, no ln, no
-            // sp3d). None of these are typed for `GroupShape`, so all round
-            // trip as raw XML (#12); `GroupShape` has no typed `fill` at all,
-            // so unlike `Shape.rawFillXML` there is no typed branch to check
-            // first.
-            for localName in ["solidFill", "gradFill", "blipFill", "pattFill", "grpFill", "noFill"] {
-                if let el = try grpSpPr.nodes(forXPath: "*[local-name()='\(localName)']").first as? XMLElement {
-                    group.rawFillXML = selfContainedXMLString(for: el)
-                    break
-                }
-            }
+            // sp3d). The fill goes through the same typed-or-raw parse as a
+            // shape's (`parseFill`); the rest have no typed model and round
+            // trip as raw XML (#12).
+            group.fill = parseFill(in: grpSpPr)
+            group.blackWhiteMode = grpSpPr.attribute(forName: "bwMode")?.stringValue
             for localName in ["effectLst", "effectDag"] {
                 if let el = try grpSpPr.nodes(forXPath: "*[local-name()='\(localName)']").first as? XMLElement {
                     group.effectXML = selfContainedXMLString(for: el)
@@ -758,14 +752,11 @@ public struct PptxReader {
 
     // MARK: - Shape Properties
 
-    /// `customGeometryXML`／`rawFillXML`／`effectXML`／`scene3dXML`／`sp3dXML`／
-    /// `extLstXML`: `CT_ShapeProperties` children pptx-swift has no typed model
-    /// for — captured self-contained (`selfContainedXMLString`), same mechanism
-    /// as `p:style` (PsychQuant/pptx-swift#11/#12). `customGeometryXML` and
-    /// `rawFillXML` are each the raw alternative to `geometry`/`fill`'s typed
-    /// output (`EG_Geometry`／`EG_FillProperties` are schema *choices* — reading
-    /// both branches independently is safe because a well-formed source XML
-    /// only ever has one).
+    /// `CT_ShapeProperties`（`p:spPr`）。`geometry`／`fill` 是 schema 的 choice
+    /// group，各自讀成單一值（typed 或原樣）；`outline` 保留原始 `<a:ln>`（見
+    /// `ShapeOutline`）；`effectXML`／`scene3dXML`／`sp3dXML`／`extLstXML` 沒有 typed
+    /// 模型，原樣保存（self-contained，同 `p:style` 的機制，PsychQuant/pptx-swift
+    /// #11／#12）。
     private static func parseShapeProperties(
         _ spPr: XMLElement,
         position: inout Position,
@@ -775,14 +766,15 @@ public struct PptxReader {
         flipVertical: inout Bool,
         fill: inout ShapeFill?,
         outline: inout ShapeOutline?,
-        geometry: inout ShapeGeometry,
-        customGeometryXML: inout String?,
-        rawFillXML: inout String?,
+        geometry: inout GeometryDefinition,
         effectXML: inout String?,
         scene3dXML: inout String?,
         sp3dXML: inout String?,
-        extLstXML: inout String?
+        extLstXML: inout String?,
+        blackWhiteMode: inout String?
     ) {
+        blackWhiteMode = spPr.attribute(forName: "bwMode")?.stringValue
+
         // Position and size
         if let xfrm = try? spPr.nodes(forXPath: "*[local-name()='xfrm']").first as? XMLElement {
             if let off = try? xfrm.nodes(forXPath: "*[local-name()='off']").first as? XMLElement {
@@ -802,55 +794,19 @@ public struct PptxReader {
             flipVertical = parseXSDBoolean(xfrm.attribute(forName: "flipV")?.stringValue)
         }
 
-        // Geometry — EG_Geometry: prstGeom | custGeom (schema choice, PsychQuant/pptx-swift#12).
+        // Geometry — EG_Geometry: prstGeom | custGeom (schema choice).
+        // A preset is fully captured by its `prst` string plus the `avLst`
+        // guides, kept as-is even when `prst` is not a `ShapeGeometry` case
+        // (review M1: writing `prst="unknown"` made the shape invalid).
         if let prstGeom = try? spPr.nodes(forXPath: "*[local-name()='prstGeom']").first as? XMLElement {
-            let prst = prstGeom.attribute(forName: "prst")?.stringValue ?? "rect"
-            geometry = ShapeGeometry(rawValue: prst) ?? .unknown
+            let prst = prstGeom.attribute(forName: "prst")?.stringValue ?? ShapeGeometry.rect.rawValue
+            geometry = .preset(prst, adjustments: parseGeometryAdjustments(prstGeom))
         } else if let custGeom = try? spPr.nodes(forXPath: "*[local-name()='custGeom']").first as? XMLElement {
-            customGeometryXML = selfContainedXMLString(for: custGeom)
+            geometry = .custom(selfContainedXMLString(for: custGeom))
         }
 
-        // Fill — EG_FillProperties: noFill | solidFill | gradFill | blipFill |
-        // pattFill | grpFill (schema choice). Only noFill／solidFill are typed;
-        // the rest round-trip as raw XML (#12).
-        if let solidFill = try? spPr.nodes(forXPath: "*[local-name()='solidFill']").first as? XMLElement {
-            if let srgb = try? solidFill.nodes(forXPath: "*[local-name()='srgbClr']").first as? XMLElement {
-                fill = .solid(color: srgb.attribute(forName: "val")?.stringValue ?? "000000")
-            } else if let scheme = try? solidFill.nodes(forXPath: "*[local-name()='schemeClr']").first as? XMLElement {
-                fill = .schemeColor(name: scheme.attribute(forName: "val")?.stringValue ?? "")
-            }
-        } else if (try? spPr.nodes(forXPath: "*[local-name()='noFill']").first) != nil {
-            fill = .noFill
-        } else {
-            for localName in ["gradFill", "blipFill", "pattFill", "grpFill"] {
-                if let el = try? spPr.nodes(forXPath: "*[local-name()='\(localName)']").first as? XMLElement {
-                    rawFillXML = selfContainedXMLString(for: el)
-                    break
-                }
-            }
-        }
-
-        // Outline
-        if let ln = try? spPr.nodes(forXPath: "*[local-name()='ln']").first as? XMLElement {
-            var shapeOutline = ShapeOutline()
-            shapeOutline.width = Int(ln.attribute(forName: "w")?.stringValue ?? "")
-            if let srgb = try? ln.nodes(forXPath: ".//*[local-name()='srgbClr']").first as? XMLElement {
-                shapeOutline.color = srgb.attribute(forName: "val")?.stringValue
-            }
-            // 線條端點（`a:headEnd`／`a:tailEnd`）：任何 `a:ln` 上 schema 都允許，
-            // 最常見於連接線（`p:cxnSp`）表示箭頭方向（PsychQuant/pptx-swift#9）。
-            func lineEnd(_ localName: String) -> LineEndStyle? {
-                guard let el = try? ln.nodes(forXPath: "*[local-name()='\(localName)']").first as? XMLElement else { return nil }
-                let type = el.attribute(forName: "type")?.stringValue
-                let width = el.attribute(forName: "w")?.stringValue
-                let length = el.attribute(forName: "len")?.stringValue
-                guard type != nil || width != nil || length != nil else { return nil }
-                return LineEndStyle(type: type, width: width, length: length)
-            }
-            shapeOutline.headEnd = lineEnd("headEnd")
-            shapeOutline.tailEnd = lineEnd("tailEnd")
-            outline = shapeOutline
-        }
+        fill = parseFill(in: spPr)
+        outline = parseOutline(in: spPr)
 
         // EG_EffectProperties: effectLst | effectDag (schema choice), #12.
         for localName in ["effectLst", "effectDag"] {
@@ -869,6 +825,85 @@ public struct PptxReader {
         if let el = try? spPr.nodes(forXPath: "*[local-name()='extLst']").first as? XMLElement {
             extLstXML = selfContainedXMLString(for: el)
         }
+    }
+
+    /// `a:prstGeom/a:avLst/a:gd`（`CT_GeomGuide`：`name`、`fmla`）。缺任一屬性的
+    /// `gd` 不合 schema，略過。
+    private static func parseGeometryAdjustments(_ prstGeom: XMLElement) -> [GeometryAdjustment] {
+        let guides = (try? prstGeom.nodes(forXPath: "*[local-name()='avLst']/*[local-name()='gd']")) ?? []
+        return guides.compactMap { node in
+            guard let gd = node as? XMLElement,
+                  let name = gd.attribute(forName: "name")?.stringValue,
+                  let formula = gd.attribute(forName: "fmla")?.stringValue else { return nil }
+            return GeometryAdjustment(name: name, formula: formula)
+        }
+    }
+
+    /// `EG_FillProperties` 的 local name（schema choice group 的全部選項）。
+    static let fillLocalNames: Set<String> = ["noFill", "solidFill", "gradFill", "blipFill", "pattFill", "grpFill"]
+
+    /// `parent`（`spPr`／`grpSpPr`）的填色。typed 值只在它能**完整**重現原始
+    /// XML 時使用：沒有屬性、沒有子元素的 `<a:noFill/>`；只含一個顏色、該顏色
+    /// 只有 `val` 屬性且沒有子元素（沒有 `lumMod`／`alpha`／`shade` 等色彩變換）
+    /// 的 `srgbClr`／`schemeClr` 實心填色。其餘一律 `.raw`——系統色
+    /// （`sysClr`）、預設色（`prstClr`）、`hslClr`、`scrgbClr`、帶色彩變換的
+    /// 顏色、漸層、圖片、圖樣、`grpFill`（PsychQuant/pptx-swift#12 審查 H1：以前
+    /// 這些不是被 typed 值吞掉變換，就是整段消失，讓 `p:style` 的主題填色頂上來）。
+    static func parseFill(in parent: XMLElement) -> ShapeFill? {
+        guard let element = elementChildren(of: parent).first(where: { fillLocalNames.contains($0.localName ?? "") })
+        else { return nil }
+        let raw = ShapeFill.raw(selfContainedXMLString(for: element))
+        guard (element.attributes ?? []).isEmpty else { return raw }
+        let children = elementChildren(of: element)
+        switch element.localName {
+        case "noFill":
+            return children.isEmpty ? .noFill : raw
+        case "solidFill":
+            guard children.count == 1, let color = children.first,
+                  elementChildren(of: color).isEmpty,
+                  let attributes = color.attributes, attributes.count == 1,
+                  attributes[0].name == "val", let value = attributes[0].stringValue else { return raw }
+            switch color.localName {
+            case "srgbClr": return .solid(color: value)
+            case "schemeClr": return .schemeColor(name: value)
+            default: return raw
+            }
+        default:
+            return raw
+        }
+    }
+
+    /// `<a:ln>`：typed 欄位加上原始 XML（見 `ShapeOutline`）。
+    private static func parseOutline(in spPr: XMLElement) -> ShapeOutline? {
+        guard let ln = elementChildren(of: spPr).first(where: { $0.localName == "ln" }) else { return nil }
+        var outline = ShapeOutline()
+        outline.width = Int(ln.attribute(forName: "w")?.stringValue ?? "")
+        let lnChildren = elementChildren(of: ln)
+        if let solidFill = lnChildren.first(where: { $0.localName == "solidFill" }),
+           let srgb = elementChildren(of: solidFill).first(where: { $0.localName == "srgbClr" }) {
+            outline.color = srgb.attribute(forName: "val")?.stringValue
+        }
+        // 線條端點（`a:headEnd`／`a:tailEnd`）：任何 `a:ln` 上 schema 都允許，
+        // 最常見於連接線（`p:cxnSp`）表示箭頭方向（PsychQuant/pptx-swift#9）。
+        func lineEnd(_ localName: String) -> LineEndStyle? {
+            guard let el = lnChildren.first(where: { $0.localName == localName }) else { return nil }
+            let type = el.attribute(forName: "type")?.stringValue
+            let width = el.attribute(forName: "w")?.stringValue
+            let length = el.attribute(forName: "len")?.stringValue
+            guard type != nil || width != nil || length != nil else { return nil }
+            return LineEndStyle(type: type, width: width, length: length)
+        }
+        outline.headEnd = lineEnd("headEnd")
+        outline.tailEnd = lineEnd("tailEnd")
+        outline.source = ShapeOutline.Source(
+            xml: selfContainedXMLString(for: ln),
+            color: outline.color, width: outline.width,
+            headEnd: outline.headEnd, tailEnd: outline.tailEnd)
+        return outline
+    }
+
+    private static func elementChildren(of element: XMLElement) -> [XMLElement] {
+        (element.children ?? []).compactMap { $0 as? XMLElement }
     }
 
     // MARK: - Connector
@@ -898,29 +933,12 @@ public struct PptxReader {
         }
 
         if let spPr = try element.nodes(forXPath: "./*[local-name()='spPr']").first as? XMLElement {
-            // Connector has no typed `fill` field (a filled connector — e.g. a
-            // custom-shaped arrowhead — is legal but rare); the typed-fill
-            // half of parseShapeProperties's output is discarded, but
-            // `rawFillXML` still lands on `connector.rawFillXML` (#12) — the
-            // two are independent outputs, not a mutually-exclusive pair here.
-            var fill: ShapeFill? = nil
             parseShapeProperties(spPr, position: &connector.position, size: &connector.size,
                                rotation: &connector.rotation, flipHorizontal: &connector.flipHorizontal, flipVertical: &connector.flipVertical,
-                               fill: &fill, outline: &connector.outline, geometry: &connector.geometry,
-                               customGeometryXML: &connector.customGeometryXML, rawFillXML: &connector.rawFillXML,
+                               fill: &connector.fill, outline: &connector.outline, geometry: &connector.geometryDefinition,
                                effectXML: &connector.effectXML, scene3dXML: &connector.scene3dXML,
-                               sp3dXML: &connector.sp3dXML, extLstXML: &connector.extLstXML)
-            // 預設幾何的調整值（a:prstGeom/a:avLst/a:gd），彎折／曲線連接線
-            // 的實際轉折點常偏離預設路徑，靠這些調整值記錄（Codex round 1
-            // review：先前完全不讀，寫出時永遠變回預設路徑）。
-            if let avLst = try spPr.nodes(forXPath: "*[local-name()='prstGeom']/*[local-name()='avLst']").first as? XMLElement {
-                for gd in try avLst.nodes(forXPath: "*[local-name()='gd']") {
-                    guard let gdElement = gd as? XMLElement,
-                          let name = gdElement.attribute(forName: "name")?.stringValue,
-                          let formula = gdElement.attribute(forName: "fmla")?.stringValue else { continue }
-                    connector.adjustments.append(GeometryAdjustment(name: name, formula: formula))
-                }
-            }
+                               sp3dXML: &connector.sp3dXML, extLstXML: &connector.extLstXML,
+                               blackWhiteMode: &connector.blackWhiteMode)
         }
 
         // Theme style reference (p:style — PsychQuant/pptx-swift#11), kept
